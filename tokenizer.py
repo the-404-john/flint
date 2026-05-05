@@ -1,14 +1,18 @@
 from enum import Enum
 from typing import Self
-from error import ErrorCode
+
+from error import *
+from common import *
 
 # Tokenizer
 # Validates input structure based on grammar rules. If the input is
 # not recognized by the grammar, it's rejected.
 #
-# NOTE: This checks syntax, not semantics. For example, it recognizes
-# numeric literals but does not verify if they fit a specific type
-# or have the correct suffixes for their length.
+# NOTE: This validates syntax at the word level, not the structural
+# or semantic level. For example, it recognizes a number as a
+# "numeric literal" without verifying its bit-length, sign, or
+# specific type compatibility or if the number was correctly used
+# within the program.
 
 class TokenTag(Enum):
     keyword = "keyword"
@@ -55,6 +59,11 @@ class EncodingPrefix(Enum):
 
 
 keywords: list[str] = [
+    # Built-in keywords.
+    "println", "assert", "malloc", "free", "free_sized", "calloc",
+    "realloc", "reallocarray",
+
+    # Standard keywords.
     "alignas", "alignof", "auto", "bool", "break", "case", "char",
     "const", "constexpr", "continue", "default", "do", "double",
     "else", "enum", "extern", "false", "float", "for", "goto",
@@ -99,27 +108,6 @@ simple_escape_seq: set[str] = {
 
 max_keyword_len: int = max(len(keyword) for keyword in keywords)
 
-def is_bin_digit(char: str) -> bool:
-    return '0' <= char <= '1'
-
-
-def is_oct_digit(char: str) -> bool:
-    return '0' <= char <= '7'
-
-
-def is_dec_digit(char: str) -> bool:
-    return '0' <= char <= '9'
-
-
-def is_hex_digit(char: str) -> bool:
-    char = char.lower()
-    return '0' <= char <= '9' or 'a' <= char <= 'f'
-
-
-def is_letter_or_num(char: str) -> bool:
-    return char.isalnum() and char.isascii()
-
-
 class Loc:
     def __init__(self, start: int, end: int) -> None:
         self.start = start
@@ -131,12 +119,15 @@ class Token:
         self.tag = tag
         self.loc = loc
 
+        # Error metadata
         self.err: ErrorCode | None = None
 
+        # Number literal metadata
         self.num_base: NumberTag | None = None
         self.int_suffix: set[IntSuffix] | None= None
         self.float_suffix: FloatSuffix | None = None
 
+        # Character and string literal metadata
         self.encoding: EncodingPrefix | None = None
 
     def assign_error(self, err: ErrorCode) -> Self:
@@ -182,10 +173,6 @@ class Tokenizer:
         # Ensure all line splices were removed during translation
         # phase 2.
         assert "\\\n" not in self.buffer
-
-        # Skip the UTF-8 BOM if present.
-        if buffer.startswith("\xEF\xBB\xBF"):
-            self.index += 3
 
     def peek(self) -> str:
         if self.index >= len(self.buffer):
@@ -893,6 +880,10 @@ def test_token_retrieve(tok: Tokenizer, tag: TokenTag, target: str) -> None:
 
 def test_keywords() -> None:
     tag = TokenTag.keyword
+
+    # Test: REcognition of built-in keywords.
+    test_token("assert", tag)
+    test_token("println", tag)
 
     # Test: Recognition of all keywords from C23 language standard.
     test_token("alignas", tag)
@@ -2740,7 +2731,7 @@ def test_simple_code_success_01() -> None:
     test_token_retrieve(tok, TokenTag.punctuator, "{")
 
     # assert( fib( 1 ) == 1 );
-    test_token_retrieve(tok, TokenTag.identifier, "assert")
+    test_token_retrieve(tok, TokenTag.keyword, "assert")
     test_token_retrieve(tok, TokenTag.punctuator, "(")
     test_token_retrieve(tok, TokenTag.identifier, "fib")
     test_token_retrieve(tok, TokenTag.punctuator, "(")
@@ -3701,5 +3692,4 @@ def test() -> None:
 if __name__ == "__main__":
     test()
 
-# TODO: Support of universal character name in direct unicode form.
-#       For example π.
+# FIX: Errors

@@ -1,7 +1,7 @@
 from enum import Enum
 
 from error import ErrorCode
-from tokenizer import Tokenizer
+from tokenizer import Tokenizer, is_oct_digit, is_dec_digit
 from flint_ast import *
 
 # Parser
@@ -22,8 +22,6 @@ from flint_ast import *
 # The parser handles the former, while static analysis handles
 # the latter.
 
-Designator = InitNode | None
-InitValue = ExprNode | InitNode | None
 
 num_bases: dict[NumberTag, int] = {
     NumberTag.int_bin: 2,
@@ -46,43 +44,220 @@ float_bases: set[NumberTag] = {
     NumberTag.float_hex
 }
 
-binding_power: dict[str, tuple[int, int]]= {
-    '+':
+char_encoding_len: dict[EncodingPrefix | None, int] = {
+    None = CHAR_BIT_LEN
+    EncodingPrefix.utf_8 = 8
+    EncodingPrefix.utf_16 = 16
+    EncodingPrefix.utf_32 = 32
+    EncodingPrefix.wide_literal = WCHAR_BIT_LEN
 }
 
-class PrimitiveType(Type, Enum):
-    bool = "bool"
-    char = "char"
-    short = "short"
-    int = "int"
-    long = "long"
-    long_long = "long long"
-    float = "float"
-    double = "double"
-    long_double = "long double"
-    void = "void"
-    bit_int = "_BitInt"
-    decimal_32 = "_Decimal32"
-    decimal_64 = "_Decimal64"
-    decimal_128 = "_Decimal128"
-    complex = "_Complex"
+simple_escapes: dict[str, str] = {
+    'a': '\a',
+    'b': '\b',
+    'f': '\f',
+    'n': '\n',
+    'r': '\r',
+    't': '\t',
+    'v': '\v',
+}
+
+binding_power: dict[str, tuple[int, int]]= {
+    # Postfix and Member Access
+    "++": (150, 149),
+    "--": (150, 149),
+    "(":  (150, 149),
+    "[":  (150, 149),
+    ".":  (150, 149),
+    "->": (150, 149),
+
+    # Multiplicative
+    "*": (130, 129),
+    "/": (130, 129),
+    "%": (130, 129),
+
+    # Additive
+    "+": (120, 119),
+    "-": (120, 119),
+
+    # Bitwise Shift
+    "<<": (110, 109),
+    ">>": (110, 109),
+
+    # Relational
+    "<":  (100, 99),
+    ">":  (100, 99),
+    "<=": (100, 99),
+    ">=": (100, 99),
+
+    # Equality
+    "==": (90, 89),
+    "!=": (90, 89),
+
+    # Bitwise AND
+    "&": (80, 79),
+
+    # Bitwise XOR
+    "^": (70, 69),
+
+    # Bitwise OR
+    "|": (60, 59),
+
+    # Logical AND
+    "&&": (50, 49),
+
+    # Logical OR
+    "||": (40, 39),
+
+    # Conditional
+    "?": (30, 29),
+
+    # Assignment
+    "=":   (20, 19),
+    "+=":  (20, 19),
+    "-=":  (20, 19),
+    "*=":  (20, 19),
+    "/=":  (20, 19),
+    "%=":  (20, 19),
+    "<<=": (20, 19),
+    ">>=": (20, 19),
+    "&=":  (20, 19),
+    "^=":  (20, 19),
+    "|=":  (20, 19),
+
+    # Sequence
+    ",": (10, 9),
+}
 
 
-class TypeQualifier(Enum):
-    const = "const"
-    restrict = "restrict"
-    volatile = "volatile"
-    atomic = "_Atomic"
+class StrFormater:
+    def __init__(self, string: str) -> None:
+        self.index = 0
+        self.string = string
 
+    def peek(self) -> str:
+        if self.index >= len(self.string):
+            return '\0'
 
-class TypeStorage(Enum):
-    auto = "auto"
-    constexpr = "constexpr"
-    extern = "extern"
-    register = "register"
-    static = "static"
-    thread_local = "_Thread_local"
-    typedef = "typedef"
+        return self.string[self.index]
+
+    def fetch(self) -> str:
+        chr: str = self.peek()
+        self.index += 1
+
+        return chr
+
+    def fetch_oca_seq(self) -> str | ErrorCode:
+        val: int = 0
+
+        for _ in range(3):
+            if is_oct_digit(self.peek()):
+                break
+
+            val *= 8
+            val += ord(self.fetch()) - ord('0')
+
+        if not (0 <= val <= 0xffff_ffff):
+            return ErrorCode.E
+
+        return chr(val)
+
+    def fetch_hex_seq(self) -> str | ErrorCode:
+        val: int = 0
+
+        while is_hex_digit(self.peek()):
+            val *= 16
+
+            if self.peek().isdigit():
+                val += ord(self.fetch()) - ord('0')
+            else:
+                val += ord(self.fetch()) - ord('a') + 10
+
+        if not (0 <= val <= 0xffff_ffff):
+            return ErrorCode.E
+
+        return chr(val)
+
+    def fetch_uni_seq(self, digits: int) -> str | ErrorCode:
+        assert digits == 4 or digits == 8
+
+        val: int = 0
+
+        for _ in range(digits):
+            val *= 16
+
+            if self.peek().isdigit():
+                val += ord(self.fetch()) - ord('0')
+            else:
+                val += ord(self.fetch()) - ord('a') + 10
+
+        if not (0x0000_0000 <= val <= 0x0010_ffff):
+            return ErrorCode.E
+
+        if 0xd800 <= val <= 0xdfff:
+            return ErrorCode.E
+
+        if 0x000 <= val <= 0x009f and val not in [0x0024, 0x0040, 0x0060]:
+            return ErrorCode.E
+
+        return chr(val)
+
+    def fetch_esc_seq(self) -> str | ErrorCode:
+        self.expect('\\')
+
+        if self.match_digit():
+            self.fetch()
+            return self.fetch_oca_seq()
+
+        if self.match('x'):
+            return self.fetch_hex_seq()
+
+        if self.match('u'):
+            return self.fetch_uni_seq(4)
+
+        if self.match('U'):
+            return self.fetch_uni_seq(8)
+
+        chr = self.fetch()
+        return simple_escapes.get(chr, chr)
+
+    def match(self, expected: str) -> bool:
+        if self.peek() == expected:
+            self.fetch()
+            return True
+
+        return False
+
+    def match_digit(self) -> bool:
+        if self.peek().isdigit():
+            self.fetch()
+            return True
+
+        return False
+
+    def expect(self, expected: str) -> str:
+        assert self.peek() == expected
+        return self.fetch()
+
+    def refmt(self, char_bit_len: int) -> str | ErrorCode:
+        new_str: list[str] = []
+
+        while self.peek() != '\0':
+            new_part: str | ErrorCode = ""
+
+            if self.peek() != '\\':
+                new_part = fetch()
+            else:
+                new_part = fetch_esc_seq()
+
+            if isinstance(new_part, ErrorCode):
+                return new_part
+
+            # TODO: check if the new_part that should represent one
+            #       character is within the encoding limit
+            new_str.append(new_part)
+
+        return "".join(new_str)
 
 
 class Parser:
@@ -91,8 +266,17 @@ class Parser:
         self.buffer = buffer
         self.tokens = tokens
 
+    def op_bp(self, op: str) -> tuple[int, int]:
+        return binding_power.get(op, (0, 0))
+
     def token_str(self, token: Token) -> str:
         return self.buffer[token.loc.start:token.loc.end]
+
+    def token_bp(self, token: Token) -> tuple[int, int]:
+        return self.op_bp(self.token_str(token))
+
+    def token_is_type(self, token: Token) -> bool:
+        pass
 
     def peek(self) -> Token:
         return self.tokens[self.index]
@@ -171,17 +355,18 @@ class Parser:
     def type(self) -> :
         pass
 
-    def check_type_name(self) -> bool:
-        pass
 
     #
-    def iden(self) -> str:
-        pass
+    def iden(self) -> str | ErrorCode:
+        if not self.check(TokenTag.identifier, None):
+            return ErrorCode.E
+
+        return StrFormater(self.token_str(self.fetch())).refmt()
 
     def expr_or_decl(self) -> ExprNode | DeclNode | ErrorCode:
         pass
 
-    def expr_or_type(self) -> ExprNode | TypeNode |:
+    def expr_or_type(self) -> ExprNode | TypeNode | ErrorCode:
         pass
 
     # Declarations.
@@ -191,7 +376,7 @@ class Parser:
         if not self.match(TokenTag.punctuator, "("):
             return ErrorCode.E
 
-        expr_or_type: ExprNode | Type | ErrorCode = self.expr_or_type()
+        expr_or_type: ExprNode | TypeNode | ErrorCode = self.expr_or_type()
         if isinstance(expr_or_type, ErrorCode):
             return expr_or_type
 
@@ -206,7 +391,7 @@ class Parser:
         if not self.match(TokenTag.punctuator, "("):
             return ErrorCode.Ej
 
-        expr_or_type: ExprNode | Type | ErrorCode = self.expr_or_type()
+        expr_or_type: ExprNode | TypeNode | ErrorCode = self.expr_or_type()
         if isinstance(expr_or_type, ErrorCode):
             return expr_or_type
 
@@ -219,9 +404,9 @@ class Parser:
         self.expect(TokenTag.keyword, "alignas")
 
         if not self.match(TokenTag.punctuator, "("):
-            return ErrorCode.Ej
+            return ErrorCode.E
 
-        expr_or_type: ExprNode | Type | ErrorCode = self.expr_or_type()
+        expr_or_type: ExprNode | TypeNode | ErrorCode = self.expr_or_type()
         if isinstance(expr_or_type, ErrorCode):
             return expr_or_type
 
@@ -231,61 +416,85 @@ class Parser:
         return AlignAsSpec(expr_or_type)
 
     def var_decl(self) -> VarDecl | ErrorCode:
-        pass
+        var_type: TypeNode | ErrorCode = self.type()
+        if isinstance(var_type, ErrorCode):
+            return var_type
 
-    def fun_param_list(self) -> list[tuple[TypeNode, str | None]]:
-        param_list: list[tuple[TypeNode, str | None] = []
+        iden: str | ErrorCode = self.iden()
+        if isinstance(iden, ErrorCode):
+            return iden
+
+        init: ExprNode | InitList | None | ErrorCode = None
+
+        if not self.check(TokenTag.punctuator, ";"):
+            if self.check(TokenTag.punctuator, "{"):
+                init = self.init_list()
+            else:
+                init = self.expr(0)
+
+            if isinstance(init, ErrorCode):
+                return init
+
+        if not self.match(TokenTag.punctuator, ";"):
+            return ErrorCode.E
+
+        return VarDecl(var_type, iden, init)
+
+    def fun_params(self) -> list[ParamSpec]:
+        params: list[ParamSpec] = []
 
         while True:
-            param_iden: str | None | ErrorCode = None
             param_type: TypeNode | ErrorCode = self.type()
-
             if isinstance(param_type, ErrorCode):
                 return param_type
 
+            param_iden: str | None | ErrorCode = None
             if self.check(TokenTag.identifier, None):
                 param_iden = self.iden()
 
                 if isinstance(param_iden, ErrorCode):
                     return param_iden
 
-            param_list.append((param_type, param_iden))
+            params.append((param_iden, param_type))
 
             if not self.match(TokenTag.punctuator, ","):
                 break
 
-        return param_list
+        return params
 
     def fun_decl(self) -> FunDecl | ErrorCode:
         ret_type: TypeNode | ErrorCode = self.type()
         if isinstance(ret_type, ErrorCode):
             return ret_type
 
-        fun_iden: str | ErrorCode = self.iden()
-        if isinstance(fun_iden, ErrorCode):
-            return fun_iden
+        iden: str | ErrorCode = self.iden()
+        if isinstance(iden, ErrorCode):
+            return iden
 
         if not self.match(TokenTag.punctuator, "("):
             return ErrorCode.E
 
-        param_list: list[tuple[TypeNode, str | None] = []
+        params: list[ParamSpec] = []
         if not self.check(TokenTag.punctuator, ")"):
-            param_list = self.fun_param_list()
+            params = self.fun_params()
 
-            if isinstance(param_list, ErrorCode):
-                return param_list
+            if isinstance(params, ErrorCode):
+                return params
 
         if not self.match(TokenTag.punctuator, ")"):
             return ErrorCode.E
 
-        fun_def: CompoundStmt | None | ErrorCode = None
+        body: CompoundStmt | None | ErrorCode = None
         if self.check(TokenTag.punctuator, "{"):
-            fun_def = self.compound_stmt()
+            body = self.compound_stmt()
 
-            if isinstance(fun_def, ErrorCode):
-                return fun_def
+            if isinstance(body, ErrorCode):
+                return body
 
-        return FunDecl(ret_type, fun_iden, param_list, fun_def)
+        elif not self.match(TokenTag.punctuator, ";"):
+            return ErrorCode.E
+
+        return FunDecl(ret_type, iden, params, body)
 
     def static_assert_decl(self) -> StaticAssertDecl | ErrorCode:
         self.expect(TokenTag.keyword, "static_assert")
@@ -293,8 +502,9 @@ class Parser:
         if not self.match(TokenTag.punctuator, "("):
             return ErrorCode.E
 
-        # FIX: Make sure, to not consume the comma operator.
-        cond_expr: ExprNode | ErrorCode = self.expr(0)
+        min_bp, _ = self.op_bp(",")
+
+        cond_expr: ExprNode | ErrorCode = self.expr(min_bp)
         if isinstance(cond_expr, ErrorCode):
             return cond_expr
 
@@ -309,22 +519,148 @@ class Parser:
         if not self.match(TokenTag.punctuator, ")"):
             return ErrorCode.E
 
+        if not self.match(TokenTag.punctuator, ";"):
+            return ErrorCode.E
+
         return StaticAssertDecl(cond_expr, str_expr)
 
-    def array_decl(self) -> :
+    def enum_members(self) -> list[EnumValue] | ErrorCode:
+        self.expect(TokenTag.punctuator, "{")
+
+        min_bp, _ = self.op_bp(",")
+        members: list[EnumValue] = []
+
+        while self.check(TokenTag.identifier, None):
+            iden: str | ErrorCode = self.iden()
+            if isinstance(iden, ErrorCode):
+                return iden
+
+            expr: ExprNode | None | ErrorCode = None
+
+            if self.match(TokenTag.punctuator, "="):
+                expr = self.expr(min_bp)
+
+                if isinstance(expr, ErrorCode):
+                    return expr
+
+            members.append((iden, expr))
+
+            if not self.match(TokenTag.punctuator, ","):
+                return ErrorCode.E
+
+        if not self.match(TokenTag.punctuator, "}"):
+            return ErrorCode.E
+
+        return members
+
+    def enum_decl(self) -> EnumDecl | ErrorCode:
+        self.expect(TokenTag.keyword, "enum")
+
+        iden: str | None | ErrorCode = None
+
+        if self.check(TokenTag.identifier, None):
+            iden = self.iden()
+
+            if isinstance(iden, ErrorCode):
+                return iden
+
+        member_type: TypeNode | None | ErroCode = None
+
+        if self.match(TokenTag.punctuator, ":"):
+            member_type = self.type()
+
+            if isinstance(member_type, ErrorCode):
+                return member_type
+
+        members: list[EnumValue] | None | ErrorCode = None
+
+        if self.check(TokenTag.punctuator, "{"):
+            members = self.enum_members()
+
+            if isinstance(members, ErrorCode):
+                return members
+
+        if not self.match(TokenTag.punctuator, ";"):
+            return ErrorCode.E
+
+        return EnumDecl(iden, members, member_type)
+
+    def members(self) -> list[MemberSpec] | ErrorCode:
+        self.expect(TokenTag.punctuator, "{")
+
+        members: list[MemberSpec] = []
+
+        while self.token_is_type(self.peek()):
+            decl: DeclNode | ErrorCode = self.decl()
+
+            if isinstance(decl, ErrorCode):
+                return decl
+
+            members.append(decl)
+
+        if not self.match(TokenTag.punctuator, "}"):
+            return ErrorCode.E
+
+        return members
+
+    def struct_or_union_spec(self) -> StructOrUnionSpec | ErrorCode:
+        iden: str | None | ErrorCode = None
+
+        if self.check(TokenTag.identifier, None):
+            iden = self.iden()
+
+            if isinstance(iden, ErrorCode):
+                return iden
+
+        members: list[MemberSpec] | None | ErrorCode = None
+
+        if self.check(TokenTag.punctuator, "{"):
+            members = self.members()
+
+            if isinstance(members, ErrorCode):
+                return members
+
+        if not self.match(TokenTag.punctuator, ";"):
+            return ErrorCode.E
+
+        return (iden, members)
+
+    def struct_decl(self) -> StructDecl | ErrorCode:
+        self.expect(TokenTag.keyword, "struct")
+
+        result StructOrUnionSpec | ErrorCode = self.struct_or_union_spec()
+        if isinstance(result, ErrorCode):
+            return result
+
+        iden, members = result
+        return StructDecl(iden, fields)
+
+    def union_decl(self) -> UnionDecl | ErrorCode:
+        self.expect(TokenTag.keyword, "union")
+
+        result StructOrUnionSpec | ErrorCode = self.struct_or_union_spec()
+        if isinstance(result, ErrorCode):
+            return result
+
+        iden, members = result
+        return UnionDecl(iden, members)
+
+    def typedef_decl(self) -> | ErrorCode:
+        self.expect(TokenTag.keyword, "typedef")
+
+        if not self.match(TokenTag.punctuator, ";"):
+            return ErrorCode.E
+
         pass
 
     def decl(self) -> DeclNode | ErrorCode:
-        self.type_name()
+        if self.check(TokenTag.keyword, "static_assert"):
+            return self.static_assert_decl()
 
-        self.iden_expr()
+        if self.check(TokenTag.keyword, "typedef"):
+            return self.typedef_decl()
 
-        if not self.check(, ";"):
-            pass
-
-        if not self.match(, ";"):
-            return ErrorCode
-
+        #   - typedef
         return
 
 
@@ -389,31 +725,20 @@ class Parser:
         else:
             return self.float_expr()
 
-
-
-    def
-
     def char_expr(self) -> CharLitExpr | ErrorCode:
         token: Token = self.expect(TokenTag.char_literal, None)
+        token_str: str = self.token_str(token)
 
-        char_expr: str | None = None
-        char_bit_length: int | None = None
+        char_expr: str | ErrorCode = StrFormater(token_str).refmt()
+        if isinstance(char_expr, ErrorCode):
+            return char_expr
 
-        if token.encoding is None:
-            char_bit_length = 7
+        char_bit_len: int = char_encoding_len[token.encoding]
+        char_max_val = (1 << char_bit_len) - 1
 
-        elif token.encoding == EncodingPrefix.utf_8:
-            char_bit_length = 8
-
-        elif token.encoding == EncodingPrefix.utf_16:
-            char_bit_length = 16
-
-        else:
-            # WARNING: Implementation defined for wide character.
-            assert token.encoding == EncodingPrefix.utf_32 or \
-                   token.encoding == EncodingPrefix.wide_literal:
-
-            char_bit_length = 32
+        for chr in char_expr:
+            if ord(chr) > char_max_val:
+                return ErrorCode.E
 
         return CharLitExpr(char_expr, char_bit_length)
 
@@ -443,21 +768,25 @@ class Parser:
 
 
 
+
+
+
     def generic_sel_expr(self) -> GenericSelExpr | ErrorCode:
         self.expect(TokenTag.keyword, "_Generic")
 
         if not self.match(TokenTag.punctuator, "("):
             return ErrorCode.E
 
-        # FIX: not a comma
-        expr: ExprNode | ErrorCode = self.expr(0)
+        min_bp, _ = self.op_bp(",")
+
+        expr: ExprNode | ErrorCode = self.expr(min_bp)
         if isinstance(expr, ErrorCode):
             return expr
 
         if not self.match(TokenTag.punctuator, ","):
             return ErrorCode.E
 
-        table: dict[TypeNode | None, ExprNode] = dict()
+        table: dict[TypeNode | None, ExprNode] = {}
 
         while True:
             case_type: TypeNode | None | ErrorCode = None
@@ -474,8 +803,7 @@ class Parser:
             if not self.match(TokenTag.punctuator, ":"):
                 return ErrorCode.E
 
-            # FIX: not a comma
-            case_expr: ExprNode | ErrorCode = self.expr(0)
+            case_expr: ExprNode | ErrorCode = self.expr(min_bp)
             if isinstance(case_expr, ErrorCode):
                 return case_expr
 
@@ -509,9 +837,10 @@ class Parser:
         if self.match(TokenTag.punctuator, ")"):
             return CallExpr(callee_expr, arg_expr_list)
 
-        while True:
-            arg_expr: ExprNode | ErrorCode = self.expr(0)
+        min_bp, _ = self.op_bp(",")
 
+        while True:
+            arg_expr: ExprNode | ErrorCode = self.expr(min_bp)
             if isinstance(arg_expr, ErrorCode):
                 return arg_expr
 
@@ -539,7 +868,6 @@ class Parser:
         self.expect(TokenTag.punctuator, ",")
 
         right_expr: ExprNode | ErrorCode = self.expr(0)
-
         if isinstance(right_expr, ErrorCode):
             return right_expr
 
@@ -568,7 +896,8 @@ class Parser:
         if self.check(TokenTag.punctuator, "{"):
             expr_or_init = self.init_list()
         else:
-            expr_or_init = self.expr(0)
+            min_bp, _ = self.op_bp(",")
+            expr_or_init = self.expr(min_bp)
 
         if isinstance(expr_or_init, ErrorCode):
             return expr_or_init
@@ -611,8 +940,10 @@ class Parser:
 
         init_elems: list[ExprNode | InitNode] = []
 
-        if self.check(TokenTag.punctuator, "}"):
+        if self.match(TokenTag.punctuator, "}"):
             return InitList(init_list)
+
+        min_bp, _ = self.op_bp(",")
 
         while True:
             elem: ExprNode | InitNode | None | ErrorCode = None
@@ -627,8 +958,7 @@ class Parser:
                 elem = self.init_list()
 
             else:
-                # FIX: set so it stops on ,
-                elem = self.expr()
+                elem = self.expr(min_bp)
 
             if isinstance(elem, ErrorCode):
                 return elem
@@ -718,26 +1048,44 @@ class Parser:
 
         return AlignOfExpr(align_type)
 
+    def paren_expr(self) -> ExprNode | ErrorCode:
+        self.expect(TokenTag.punctuator, "(")
 
-
-
-
-    def expr_nud(self) -> ExprNode | ErrorCode:
-        # cast
-        # compound
-        # -1[ arr ] => - ( 1[ arr ]) | => something something bp
-        have_nop_plus = self.match(TokenTag.punctuator, "+")
-
-        if self.match(TokenTag.punctuator, "("):
-            expr: ExprNode | ErrorCode = self.expr()
-            if isinstance(expr, ErrorCode):
-                return expr
-
-            if not self.match(TokenTag.punctuator, ")"):
-                return ErrorCode.E
-
+        expr: ExprNode | ErrorCode = self.expr()
+        if isinstance(expr, ErrorCode):
             return expr
 
+        if not self.match(TokenTag.punctuator, ")"):
+            return ErrorCode.E
+
+        return expr
+
+    def paren_or_cast_or_compound_expr(self) -> None:
+        assert self.check(TokenTag.punctuator, "(")
+
+        token: Token | None = self.peek_nth(1)
+
+        if token is None:
+            return ErrorCode.
+
+        if self.token_is_type(token):
+            return self.cast_or_compound_expr()
+        else:
+            return self.parent_expr()
+
+    # NOTE: The term "nud" referes to [nu]ll [d]enotation.
+    #
+    # It handles tokens that appear at the start of an expression
+    # (e.g., literals, variables, prefix operators) because they
+    # do not require a left-hand operand.
+    #
+    # Analogy (Natural Language):
+    # Think of a "nud" as a subject or a noun, like the words "The Moon"
+    # or "Seventeen".
+    #
+    # It is a standalone entity that carries its own meaning and can
+    # initiate a thought without needing prior context.
+    def expr_nud(self) -> ExprNode | ErrorCode:
         if self.check(TokenTag.identifier, None):
             return self.iden_expr()
 
@@ -747,33 +1095,48 @@ class Parser:
         if self.check(Token.char_literal, None):
             return self.char_expr()
 
-        if have_nop_plus:
-            return ErrorCode.E
-
         if self.check(TokenTag.string_literal, None):
             return self.str_expr()
+
+        if self.check(TokenTag.keyword, "sizeof"):
+            return self.sizeof_expr()
+
+        if self.check(TokenTag.keyword, "alignof"):
+            return self.alignof_expr()
+
+        if self.check(TokenTag.keyword, "_Generic"):
+            return self.generic_sel_expr()
+
+        if self.check(TokenTag.punctuator, "("):
+            return self.paren_or_cast_or_compound_expr()
 
         for op in UnaPrefOpTag:
             if not self.match(TokenTag.punctuator, op.value):
                 continue
 
-            una_expr: ExprNode | ErrorCode = self.expr()
+            una_expr: ExprNode | ErrorCode = self.expr(0)
             if isinstance(una_expr, ErrorCode):
                 return una_expr
 
             return OpExpr(op, [una_expr])
 
-        # NOTE: Not an atom
         return ErrorCode.E
 
+    # NOTE: The term "led" referes to [le]ft [d]enotation.
+    #
+    # It parses tokens that consume the expression to their left
+    # (e.g., infix operators like '+' or postfix operators like '++').
+    #
+    # Analogy (Natural Language):
+    # Think of a "led" as a conjunction or relative clause, like
+    # the words "and", "which" or "because".
+    #
+    # A "led" fundamentally "incomplete" without the words that came
+    # before it. It acts as a bridge that requires a preceding subject
+    # to have any meaning.
     def expr_led(self,
                  left_expr: ExprNode,
-                 rbp: int) -> ExprNode | ErrorCode:
-        # something something, bp
-        # There is something wrong, i should collect the operator in
-        # the function I think??
-        # also something something assignment operators, just parse them
-        # and the in the analysis check that it's valid
+                 min_bp: int) -> ExprNode | ErrorCode:
         if self.check(TokenTag.punctuator, "("):
             return self.call_expr(left_expr)
 
@@ -784,24 +1147,21 @@ class Parser:
            self.check(TokenTag.punctuator, "->"):
             return self.member_expr(left_expr)
 
-        if self.check(TokenTag.punctuator, ","):
-            return self.comma_expr(left_expr)
-
         if self.check(TokenTag.punctuator, "?"):
             return self.cond_expr(left_expr)
 
-        # FIX: THIS SHIT
-        for op in UnsaPostOpTag:
-            if not self.match(TokenTag.punctuator, op.value):
-                continue
+        if self.check(TokenTag.punctuator, ","):
+            return self.comma_expr(left_expr)
 
-            return OpExpr(op, [left_expr])
+        for op in UnaPostOpTag:
+            if self.match(TokenTag.punctuator, op.value):
+                return OpExpr(op, [left_expr])
 
         for op in BinOpTag:
             if not self.match(TokenTag.punctuator, op.value):
                 continue
 
-            right_expr: ExprNode | ExprNode = self.expr()
+            right_expr: ExprNode | ExprNode = self.expr(min_bp)
             if isinstance(right_expr, ErrorCode):
                 return right_expr
 
@@ -809,40 +1169,96 @@ class Parser:
 
         return ErrorCode.E
 
+    # Pratt expression parser:
+    # Consumes tokens as long as their left binding power (l_bp)
+    # exceeds the current min_bp.
     def expr(self, min_bp: int) -> ExprNode | ErrorCode:
         left_expr: ExprNode | ErrorCode = self.expr_nud()
-
         if isinstance(left_expr, ErrorCode):
             return left_expr
 
         while True:
-            if self.check(TokenTag.eof, None):
+            l_bp, r_bp = self.token_bp(self.peek())
+            if min_bp > l_bp:
                 break
 
-            # if not in infix, break
-            if self.check(TokenTag.punctuator, ")"):
-                break
-
-            # check if it's operator
-
-            lbp, _ = self.peek_bp()
-
-            if min_bp > lbp:
-                break
-
-            left_expr = self.expr_led(left_expr)
-
+            left_expr = self.expr_led(left_expr, r_bp)
             if isinstance(left_expr, ErrorCode):
                 return left_expr
 
         return left_expr
 
-
-
-
-
-
     # Statements.
+    # NOTE: Using built-in statements for "assert" and "println" helps us
+    # bypass two hurdles:
+    #
+    # - First, it removes the need for a preprocessor (which we don't
+    #   have and might not want).
+    #
+    # - Second, it lets us provide essential debugging tools without
+    #   having to build out a full standard library for I/O and signal
+    #   handling.
+    #
+    # It's a pragmatic shortcut to give users verification power
+    # early on.
+    def fmt_spec(self) -> FmtSpec | ErrorCode:
+        str_expr: StrLitExpr | None | ErrorCode = None
+
+        if self.match(TokenTag.punctuator, ","):
+            str_expr = self.str_expr()
+
+            if isinstance(str_expr, ErrorCode):
+                return str_expr
+
+        arg_exprs: list[ExprNode] | ErrorCode = []
+
+        if self.match(TokenTag.punctuator, ","):
+            arg_exprs = self.
+            if isinstance(str_expr, ErrorCode):
+                return str_expr
+
+        return (str_expr, arg_exprs)
+
+    def println_stmt(self) -> PrintLnStmt | ErrorCode:
+        self.expect(TokenTag.keyword, "println")
+
+        if not self.match(TokenTag.punctuator, "("):
+            return ErrorCode.E
+
+        result: FmtSpec | ErrorCode = self.fmt_spec()
+        if isinstance(result, ErrorCode):
+            return result
+
+        str_expr, arg_exprs = result
+
+        if not self.match(TokenTag.punctuator, ")"):
+            return ErrorCode.E
+
+        return PrintLn(str_expr, arg_exprs)
+
+    def assert_stmt(self) -> AssertStmt | ErrorCode:
+        self.expect(TokenTag.keyword, "assert")
+
+        if not self.match(TokenTag.punctuator, "("):
+            return ErrorCode.E
+
+        min_bp, _ = self.op_bp(",")
+
+        cond_expr: ExprNode | ErrorCode = self.expr(min_bp)
+        if isinstance(cond_expr, ErrorCode):
+            return cond_expr
+
+        result: FmtSpec | ErrorCode = self.fmt_spec()
+        if isinstance(result, ErrorCode):
+            return result
+
+        str_expr, arg_exprs = result
+
+        if not self.match(TokenTag.punctuator, ")"):
+            return ErrorCode.E
+
+        return AssertStmt(cond_expr, str_expr, arg_exprs)
+
     def compound_stmt(self) -> CompoundStmt | ErrorCode:
         self.expect(TokenTag.keyword, "{")
 
@@ -868,15 +1284,13 @@ class Parser:
         return ExprStmt(expr)
 
     def decl_stmt(self) -> DeclStmt | ErrorCode:
-        decl: DeclNode | ErrorCode = self.decl()
-        if isinstance(decl, ErrorCode):
-            return decl
-
-        if isinstance(decl, FunDecl) and decl.fun_def is not None:
-            return DeclStmt(decl)
-
-        if not self.match(TokenTag.punctuator, ";"):
-            return ErrorCode.E
+        # decl: DeclNode | ErrorCode = self.decl()
+        # if isinstance(decl, ErrorCode):
+        #     return decl
+        #
+        # FIX: maybe do not allow this?
+        # if isinstance(decl, FunDecl) and decl.fun_def is not None:
+        #     return DeclStmt(decl)
 
         return DeclStmt(decl)
 
@@ -884,7 +1298,7 @@ class Parser:
         if self.match(TokenTag.punctuator, ";"):
             return ExprStmt(None)
 
-        if self.check_type_name():
+        if self.check_if_type(0):
             return self.decl_stmt()
         else
             return self.expr_stmt()
@@ -1101,6 +1515,12 @@ class Parser:
         return ReturnStmt(ret_expr)
 
     def stmt(self) -> Stmt | ErrorCode:
+        if self.check(TokenTag.keyword, "assert"):
+            return self.assert_stmt()
+
+        if self.check(TokenTag.keyword, "println"):
+            return self.println_stmt()
+
         if self.check(TokenTag.keyword, "{"):
             return self.compound_stmt()
 
@@ -1143,12 +1563,18 @@ class Parser:
 
         return self.expr_or_decl_stmt()
 
-    def parse(self) -> ASTRoot | ErrorCode:
-        # gcc -E
-        while self.peek().tag != TokenTag.eof:
-            pass
+    def parse(self) -> TransUnitDecl | ErrorCode:
+        decls: list[DeclNode] = []
 
-        return
+        while not self.check(TokenTag.eof, None):
+            decl: DeclNode | ErrorCode = self.decl()
+
+            if isinstance(decl, ErrorCode):
+                return decl
+
+            decls.append(decl)
+
+        return TransUnitDecl(decls)
 
 
 def test_ast_compare(buffer: str, expected: str) -> None:
@@ -1606,25 +2032,6 @@ def test_expr_bin_bool_or_success() -> None:
     test_expr_bin_op("||")
 
 
-def test_expr_bin_op_success() -> None:
-    test_expr_bin_bit_and_success()
-    test_expr_bin_mul_success()
-    test_expr_bin_add_success()
-    test_expr_bin_sub_success()
-    test_expr_bin_div_success()
-    test_expr_bin_mod_success()
-    test_expr_bin_shl_success()
-    test_expr_bin_shr_success()
-    test_expr_bin_lt_success()
-    test_expr_bin_gt_success()
-    test_expr_bin_le_success()
-    test_expr_bin_ge_success()
-    test_expr_bin_eq_success()
-    test_expr_bin_ne_success()
-    test_expr_bin_bit_xor_success()
-    test_expr_bin_bit_or_success()
-    test_expr_bin_bool_and_success()
-    test_expr_bin_bool_or_success()
 
 
 def test_expr_assign_op(op: str) -> None:
@@ -1665,59 +2072,96 @@ def test_expr_assign_op(op: str) -> None:
     test_ast(f"node->data {op} foo()")
 
 
-def test_expr_assign_assign_success() -> None:
+def test_expr_bin_assign_success() -> None:
     # Test:
     test_expr_assign_op("=")
 
 
-def test_expr_assign_mul_success() -> None:
+def test_expr_bin_assign_mul_success() -> None:
     # Test:
     test_expr_assign_op("*=")
 
 
-def test_expr_assign_div_success() -> None:
+def test_expr_bin_assign_div_success() -> None:
     # Test:
     test_expr_assign_op("/=")
 
 
-def test_expr_assign_mod_success() -> None:
+def test_expr_bin_assign_mod_success() -> None:
     # Test:
     test_expr_assign_op("%=")
 
 
-def test_expr_assign_add_success() -> None:
+def test_expr_bin_assign_add_success() -> None:
     # Test:
     test_expr_assign_op("+=")
 
 
-def test_expr_assign_sub_success() -> None:
+def test_expr_bin_assign_sub_success() -> None:
     # Test:
     test_expr_assign_op("-=")
 
 
-def test_expr_assign_shl_success() -> None:
+def test_expr_bin_assign_shl_success() -> None:
     # Test:
     test_expr_assign_op("<<=")
 
 
-def test_expr_assign_shr_success() -> None:
+def test_expr_bin_assign_shr_success() -> None:
     # Test:
     test_expr_assign_op(">>=")
 
 
-def test_expr_assign_bit_and_success() -> None:
+def test_expr_bin_assign_bit_and_success() -> None:
     # Test:
     test_expr_assign_op("&=")
 
 
-def test_expr_assign_bit_xor_success() -> None:
+def test_expr_bin_assign_bit_xor_success() -> None:
     # Test:
     test_expr_assign_op("^=")
 
 
-def test_expr_assign_bit_or_success() -> None:
+def test_expr_bin_assign_bit_or_success() -> None:
     # Test:
     test_expr_assign_op("|=")
+
+
+def test_expr_bin_op_success() -> None:
+    test_expr_bin_mul_success()
+    test_expr_bin_add_success()
+    test_expr_bin_sub_success()
+    test_expr_bin_div_success()
+    test_expr_bin_mod_success()
+
+    test_expr_bin_shl_success()
+    test_expr_bin_shr_success()
+
+    test_expr_bin_lt_success()
+    test_expr_bin_gt_success()
+    test_expr_bin_le_success()
+    test_expr_bin_ge_success()
+    test_expr_bin_eq_success()
+    test_expr_bin_ne_success()
+
+    test_expr_bin_bit_and_success()
+    test_expr_bin_bit_xor_success()
+    test_expr_bin_bit_or_success()
+
+    test_expr_bin_bool_and_success()
+    test_expr_bin_bool_or_success()
+
+    test_expr_bin_assign_success()
+    test_expr_bin_assign_mul_success()
+    test_expr_bin_assign_div_success()
+    test_expr_bin_assign_mod_success()
+    test_expr_bin_assign_add_success()
+    test_expr_bin_assign_sub_success()
+    test_expr_bin_assign_shl_success()
+    test_expr_bin_assign_shr_success()
+    test_expr_bin_assign_bit_and_success()
+    test_expr_bin_assign_bit_xor_success()
+    test_expr_bin_assign_bit_or_success()
 
 
 def test_expr_ter_op_success() -> None:
@@ -1736,20 +2180,6 @@ def test_expr_ter_op_success() -> None:
     test_ast("a ? b = 0 : c = 1")
 
     test_ast("foo() ? bar() : baz()")
-
-
-def test_expr_assign_op_success() -> None:
-    test_expr_assign_assign_success()
-    test_expr_assign_mul_success()
-    test_expr_assign_div_success()
-    test_expr_assign_mod_success()
-    test_expr_assign_add_success()
-    test_expr_assign_sub_success()
-    test_expr_assign_shl_success()
-    test_expr_assign_shr_success()
-    test_expr_assign_bit_and_success()
-    test_expr_assign_bit_xor_success()
-    test_expr_assign_bit_or_success()
 
 
 def test_expr_comma_success() -> None:
@@ -2515,3 +2945,11 @@ if __name__ == "__main__":
 #     [1][1] = 5,
 #     [2][0] = 9
 # };
+
+
+# won't use bit fields, because we have bit-int
+
+
+# TODO: diagraphs if meee
+# TODO: maybe should make everything from string, into bytes, because
+#       fucking me

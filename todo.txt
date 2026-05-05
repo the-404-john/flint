@@ -1,0 +1,33 @@
+- Parser declarations
+- Parser char and string expression
+- Parser float expression, idk what to do about this...
+- Parser tests
+
+- Runtime implementation
+    - The fucking way how it's goona run
+    - Value objects
+    - detection of UB
+    - and other shit...
+    - steps, trace and backtrace
+    - evaluation left and then right and other way arround to see the
+      fcking differences in execution
+
+- Static analysis
+    - fix the shit I did in parser
+
+- fix the fucking ast
+    - create dump post or prefix representation i forgot
+    - create tree dump, so I can see it
+    - fcking
+
+- create error code definitions
+
+- create toml definitions
+    - fkcing if want to trace
+    - if want steps
+    - what step limit
+    - if want clock cycles => herustic step count
+    - what week limitation do we need and so on
+
+- maybe also malloc, free and realloc, because otherwise mornfall
+  not gonna like

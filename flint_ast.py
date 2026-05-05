@@ -7,11 +7,57 @@ from tokenizer import TokenTag, NumberTag
 from parser import Parser
 
 
-#
-
 non_supported: set[TokenTag] = {
 
 }
+
+ParamSpec = tuple[str | None, TypeNode]
+
+EnumValueSpec = tuple[str, ExprNode | None]
+
+MemberSpec = tuple[str, TypeNode]
+StructOrUnionSpec = tuple[str | None, list[MemberSpec] | None]
+
+FmtSpec = tuple[StrLitExpr | None, list[ExprNode]]
+
+Designator = InitNode | None
+InitValue = ExprNode | InitNode | None
+
+
+class PrimitiveType(Type, Enum):
+    bool = "bool"
+    char = "char"
+    short = "short"
+    int = "int"
+    long = "long"
+    long_long = "long long"
+    float = "float"
+    double = "double"
+    long_double = "long double"
+    void = "void"
+    bit_int = "_BitInt"
+    decimal_32 = "_Decimal32"
+    decimal_64 = "_Decimal64"
+    decimal_128 = "_Decimal128"
+    complex = "_Complex"
+
+
+class TypeQualifier(Enum):
+    const = "const"
+    restrict = "restrict"
+    volatile = "volatile"
+    atomic = "_Atomic"
+
+
+class TypeStorage(Enum):
+    auto = "auto"
+    constexpr = "constexpr"
+    extern = "extern"
+    register = "register"
+    static = "static"
+    thread_local = "_Thread_local"
+    typedef = "typedef"
+
 
 
 class OpTag(Enum):
@@ -83,10 +129,6 @@ class BinOpTag(OpTag):
     bool_and = "&&"
     # lhs || rhs
     bool_or = "||"
-
-
-# Assignment operators.
-class AssignOpTag(OpTag):
     # lhs = rhs
     assign = "="
     # lhs *= rhs
@@ -164,56 +206,8 @@ class ArrayType(Type):
         self.elem_count = elem_count
 
 
-class Field:
-    def __init__(self,
-                 iden: str,
-                 elem_type: TypeName,
-                 elem_bit_width: int | None) -> None:
-        self.iden = iden
-        self.elem_type = elem_type
-        self.elem_bit_width = elem_bit_width
 
 
-class StructType(Type):
-    def __init__(self,
-                 iden: str | None,
-                 members: list[Field]) -> None:
-        self.iden = iden
-        self.members = members
-
-
-class UnionType(Type):
-    def __init__(self,
-                 iden: str | None,
-                 members: list[Field]) -> None:
-        self.iden = iden
-        self.members = members
-
-
-class EnumConstant:
-    def __init__(self,
-                 iden: str,
-                 const_expr: ASTNode) -> None:
-        self.iden = iden
-        self.const_expr = const_expr
-
-
-class EnumType(Type):
-    def __init__(self,
-                 iden: str | None,
-                 members: list[EnumConstant],
-                 member_type: Type) -> None:
-        self.iden = iden
-        self.members = members
-        self.member_type = member_type
-
-
-class FunctionType(Type):
-    def __init__(self,
-                 ret_type: TypeName,
-                 param_types: list[TypeName]) -> None:
-        self.ret_type = ret_type
-        self.param_types = param_types
 
 
 
@@ -380,32 +374,67 @@ class TypeOfUnqualSpec():
         self.expr_or_type = expr_or_type
 
 
-class AlignAsSpec(DeclNode):
+class AlignAsSpec():
     def __init__(self, expr_or_type: ExprNode | TypeNode) -> None:
         self.expr_or_type = expr_or_type
+
+
+class TransUnitDecl(DeclNode):
+    def __init__(self, decls: list[DeclNode]) -> None:
+        self.decls = decls
 
 
 class VarDecl(DeclNode):
     def __init__(self,
                  var_type: TypeNode,
                  var_iden: str,
-                 init_decl_list: ) -> None:
+                 init: ExprNode | InitList | None) -> None:
         self.var_type= var_type
         self.iden = iden
-        self.init_decl_list = init_decl_list
+        self.init = init
 
 
 class FunDecl(DeclNode):
     def __init__(self,
                  ret_type: TypeNode,
-                 fun_iden: str,
-                 param_list: list[tuple[TypeNode, str | None]],
-                 fun_def: CompoundStmt | None) -> None:
+                 iden: str,
+                 params: list[tuple[TypeNode, str | None]],
+                 body: CompoundStmt | None) -> None:
         self.ret_type = ret_type
-        self.fun_iden = fun_iden
-        self.param_list = param_list
-        self.fun_def = fun_def
+        self.iden = iden
+        self.params = params
+        self.body = body
 
+
+class EnumDecl(DeclNode):
+    def __init__(self,
+                 iden: str | None,
+                 members: list[tuple[str, ExprNode | None]] | None,
+                 member_type: TypeNode | None) -> None:
+        self.iden = iden
+        self.members = members
+        self.member_type = member_type
+
+
+class StructDecl(DeclNode):
+    def __init__(self,
+                 iden: str | None,
+                 fields: list[DeclNode] | None) -> None:
+        self.iden = iden
+        self.fields = fields
+
+
+class UnionDecl(DeclNode):
+    def __init__(self,
+                 iden: str | None,
+                 members: list[DeclNode] | None) -> None:
+        self.iden = iden
+        self.members = members
+
+
+class TypedefDecl(DeclNode):
+    def __init__(self, ) -> None:
+        pass
 
 class StaticAssertDecl(DeclNode):
     def __init__(self,
@@ -432,6 +461,24 @@ class ArrayDecl(DeclNode):
 
 
 # Statements.
+class PrintLnStmt(StmtNode):
+    def __init__(self,
+                 str_expr: StrLitExpr | None,
+                 arg_exprs: list[ExprNode]) -> None:
+        self.str_expr = str_expr
+        self.arg_exprs = arg_exprs
+
+
+class AssertStmt(StmtNode):
+    def __init__(self,
+                 cond_expr: ExprNode,
+                 str_expr: StrLitExpr | None,
+                 arg_exprs: list[ExprNode]) -> None:
+        self.cond_expr = cond_expr
+        self.str_expr = str_expr
+        self.arg_exprs = arg_exprs
+
+
 class CompoundStmt(StmtNode):
     def __init__(self,
                  block_items: list[StmtNode]) -> None:
@@ -537,10 +584,17 @@ class AST:
 
         parser =
 
-
-    def dump(self) -> str:
+    def analyze(self) -> None | ErrorCode:
         pass
 
+    def normalize(self) -> None:
+        pass
+
+    def dump_posfix(self) -> str:
+        pass
+
+    def dump_tree(self) -> str:
+        pass
 
 # TODO: Fix AST initialization
 # TODO: Fix types
