@@ -1,14 +1,15 @@
 <div align="center">
   <picture>
-    <img alt="The Flint Interpret"
-         src="flint_logo.png"
-         width="50%">
+    <img
+        alt="Flint Interpreter: An educational tool for C programming best practices"
+        src="https://raw.githubusercontent.com/the-404-john/flint/main/flint_logo.png"
+        width="50%">
   </picture>
+
+  <p>This is the main source code repository for project
+    <a href="https://github.com/the-404-john/flint">Flint</a>.
+  </p>
 </div>
-
-This is the main source code repository for project [Flint].
-
-[Flint]:  https://github.com/the-404-john/flint
 
 ## What is Flint?
 Programming in languages like C is challenging for beginners because
