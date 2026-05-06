@@ -1,7 +1,7 @@
 <div align="center">
   <picture>
-    <img alt="The "
-         src="https://github.com/the-404-john/flint/flint_logo.png"
+    <img alt="The Flint Interpret"
+         src="flint_logo.png"
          width="50%">
   </picture>
 </div>
@@ -21,7 +21,8 @@ primarily for educational purposes, [Flint] is written in [Python] in
 a straightforward manner so that students can also learn by reading
 the source code.
 
-> [!WARNING] Development Status
+> [!WARNING]
+> Development Status
 > Flint is still a work in progress! A significant amount of
 development is required before the project reaches its **official Beta
 release**.
