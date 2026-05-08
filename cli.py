@@ -8,7 +8,7 @@ from enum import Enum
 
 from error import *
 from common import *
-from cli_msgs import *
+from cli_messages import *
 
 from repl import REPL
 from build import Builder
@@ -790,5 +790,3 @@ def test() -> None:
 
 if __name__ == "__main__":
     test()
-
-# FIX: Errors.

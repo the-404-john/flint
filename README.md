@@ -23,7 +23,6 @@ a straightforward manner so that students can also learn by reading
 the source code.
 
 > [!WARNING]
-> Development Status
 > Flint is still a work in progress! A significant amount of
 development is required before the project reaches its **official Beta
 release**.
@@ -47,7 +46,7 @@ see [INSTALL.md].
 [INSTALL.md]: (INSTALL.md)
 
 ## License
-This project is licensed under the MIT License - see the [LICENSE-MIT]
+This project is licensed under the MIT License — see the [LICENSE-MIT]
 file for details.
 
 [LICENSE-MIT]: (LICENSE-MIT)
@@ -56,7 +55,7 @@ file for details.
 The interpreter was built for teachers and students, by a teacher
 and a student. Every line of code in this project is intentional. If
 you encounter a section that seems unoptimized or unconventional
-by modern Python standards, know that it was written that way
+by modern [Python] standards, know that it was written that way
 for a specific reason.
 
 One of the primary goals of this project isn't just to execute [C23]
@@ -65,11 +64,11 @@ source code and actually understand how it works.
 
 To maintain this level of transparency, the project follows a strict
 set of constraints:
-- Zero to Minimal Dependencies.
-- Restricted Python Subset.
-    - No Magic Methods.
-    - No Complex Control Flow.
-    - Manual Error Handling.
+- Zero to minimal dependencies.
+- Restricted [Python] subset.
+    - No magic methods.
+    - No complex control flow.
+    - Manual error handling.
 
 We adhere strictly to these principles, departing from them only when
 necessary for system interaction. In such cases, we maintain

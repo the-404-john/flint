@@ -60,8 +60,7 @@ class EncodingPrefix(Enum):
 
 keywords: list[str] = [
     # Built-in keywords.
-    "println", "assert", "malloc", "free", "free_sized", "calloc",
-    "realloc", "reallocarray",
+    "println", "assert"
 
     # Standard keywords.
     "alignas", "alignof", "auto", "bool", "break", "case", "char",
@@ -881,7 +880,7 @@ def test_token_retrieve(tok: Tokenizer, tag: TokenTag, target: str) -> None:
 def test_keywords() -> None:
     tag = TokenTag.keyword
 
-    # Test: REcognition of built-in keywords.
+    # Test: Recognition of built-in keywords.
     test_token("assert", tag)
     test_token("println", tag)
 

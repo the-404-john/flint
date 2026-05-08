@@ -49,3 +49,10 @@
 # - types are correct to their operator
 
 # -
+
+
+class Analysis:
+    def __init__(self) -> None:
+        pass
+
+    def

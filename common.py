@@ -33,3 +33,6 @@ def is_hex_digit(char: str) -> bool:
 
 def is_letter_or_num(char: str) -> bool:
     return char.isalnum() and char.isascii()
+
+def is_byte(value: int) -> bool:
+    return 0 <= value <= 255

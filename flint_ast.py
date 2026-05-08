@@ -311,16 +311,18 @@ class CompoundLitExpr(ExprNode):
 
 class CastExpr(ExprNode):
     def __init__(self,
+                 is_explicit: bool,
                  expr_type: TypeNode,
                  val_expr: ExprNode) -> None:
+        self.is_explicit = is_explicit
         self.expr_type = expr_type
         self.val_expr = val_expr
 
 
 class OpExpr(ExprNode):
-    def __init__(self, op: OpTag, expr_arg: list[ExprNode]) -> None:
+    def __init__(self, op: OpTag, exprs: list[ExprNode]) -> None:
         self.op = op
-        self.expr = expr
+        self.exprs = exprs
 
 
 class CondExpr(ExprNode):
