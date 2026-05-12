@@ -14,6 +14,26 @@ def str_to_int(string: str) -> int | Error:
     return num
 
 
+def int_to_str(integer: int) -> str:
+    if integer == 0:
+        return "0"
+
+    is_negative: bool = integer < 0
+    digits: list[str] = []
+
+    integer = abs(integer)
+
+    while integer != 0:
+        digits.append(chr(ord('0') + integer % 10))
+        integer //= 10
+
+    if is_nagetive:
+        digits.append("-")
+
+    digits.reverse()
+    return "".join(digits)
+
+
 def is_bin_digit(char: str) -> bool:
     return '0' <= char <= '1'
 

@@ -13,6 +13,10 @@ from common import *
 # "numeric literal" without verifying its bit-length, sign, or
 # specific type compatibility or if the number was correctly used
 # within the program.
+#
+# Analogy (Natural Language):
+#
+
 
 class TokenTag(Enum):
     keyword = "keyword"
@@ -60,7 +64,7 @@ class EncodingPrefix(Enum):
 
 keywords: list[str] = [
     # Built-in keywords.
-    "println", "assert"
+    "assert", "println",
 
     # Standard keywords.
     "alignas", "alignof", "auto", "bool", "break", "case", "char",
@@ -3675,7 +3679,7 @@ def test_simple_code() -> None:
     test_simple_code_failure()
 
 
-def test() -> None:
+def test_tokenizer() -> None:
     test_keywords()
     test_punctuators()
     test_identifier()
@@ -3689,6 +3693,4 @@ def test() -> None:
     test_simple_code()
 
 if __name__ == "__main__":
-    test()
-
-# FIX: Errors
+    test_tokenizer()

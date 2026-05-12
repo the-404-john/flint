@@ -13,6 +13,7 @@ from cli_messages import *
 from repl import REPL
 from build import Builder
 from eval import Evaluator
+from format import Formater
 
 # Command-line Interface
 # Enables users to interact with the software and manage its execution
@@ -209,7 +210,7 @@ class CLI:
         )
 
         start_time = time.perf_counter()
-        ast: AST | Error = Builder().build_file(self.file_name)
+        ast: AST | Error = Builder(False).build_file(self.file_name)
         end_time = time.perf_counter()
 
         if isinstance(ast, Error):
@@ -329,7 +330,7 @@ class CLI:
         if CLIOption.help in self.options:
             return write_on_stdout(FORMAT_HELP_MESSAGE)
 
-        ast: AST | Error = Builder().build_file(self.file_name)
+        ast: AST | Error = Builder(True).build_file(self.file_name)
         if isinstance(ast, Error):
             return self.report_failure(ast)
 
@@ -779,7 +780,7 @@ def test_cmd_help() -> None:
     test_cmd_help_failure()
 
 
-def test() -> None:
+def test_cli_cmds() -> None:
     test_cmd_run()
     test_cmd_check()
     test_cmd_watch()
@@ -789,4 +790,4 @@ def test() -> None:
 
 
 if __name__ == "__main__":
-    test()
+    test_cli_cmds()

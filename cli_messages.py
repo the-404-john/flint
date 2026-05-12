@@ -271,7 +271,7 @@ def test() -> None:
 
 if __name__ == "__main__":
     # NOTE: Uncomment `visualize_messages()` the line below to render
-    #       all formatted documentation strings for manual inspection.
+    # all formatted documentation strings for manual inspection.
     # visualize_messages()
 
     test()

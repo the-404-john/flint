@@ -29,6 +29,23 @@ class ErrorCode(Enum):
     E0026 = "empty character literal"
 
 
+class Span:
+    def __init__(self, start: int, end: int) -> None:
+        self.start = start
+        self.end = end
+
+
 class Error:
+    # def __init__(self, code: ErrorCode, span: Span, hint: str) -> None:
+    #     self.code = code
+    #     self.span = span
+    #     self.hint = hint
+
     def __init__(self) -> None:
+        pass
+
+    def code(self) -> int:
+        pass
+
+    def report(self) -> str:
         pass

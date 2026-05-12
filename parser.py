@@ -1,7 +1,9 @@
 from enum import Enum
 
-from error import ErrorCode
-from tokenizer import Tokenizer, is_oct_digit, is_dec_digit
+from error import Error
+from common import is_oct_digit, is_dec_digit
+
+from tokenizer import Tokenizer, IntSuffix, FloatSuffix, EncodingPrefix
 from flint_ast import *
 
 # Parser
@@ -45,11 +47,19 @@ float_bases: set[NumberTag] = {
 }
 
 char_encoding_len: dict[EncodingPrefix | None, int] = {
-    None = CHAR_BIT_LEN
-    EncodingPrefix.utf_8 = 8
-    EncodingPrefix.utf_16 = 16
-    EncodingPrefix.utf_32 = 32
-    EncodingPrefix.wide_literal = WCHAR_BIT_LEN
+    None: 8,
+    EncodingPrefix.utf_8: 8,
+    EncodingPrefix.utf_16: 16,
+    EncodingPrefix.utf_32: 32,
+    EncodingPrefix.wide_literal: 32,
+}
+
+encoding_to_char_kind: dict[EncodingPrefix | None, CharKind] = {
+    None: CharKind.char,
+    EncodingPrefix.utf_8: CharKind.char8,
+    EncodingPrefix.utf_16: CharKind.char16,
+    EncodingPrefix.utf_32: CharKind.char32,
+    EncodingPrefix.wide_literal: CharKind.wchar,
 }
 
 simple_escapes: dict[str, str] = {
@@ -681,7 +691,7 @@ class Parser:
         assert token.int_suffix is not None
 
         num: int = 0
-        base: int = num_base[token.num_base]
+        base: int = num_bases[token.num_base]
 
         num_str: str = self.token_str(token)
 
@@ -693,34 +703,59 @@ class Parser:
                 continue
 
             num *= base
-            num += ord(chr) - ord('0')
 
-        bit_length: int = INT_BIT_LEN
+            if chr.isdigit():
+                num += ord(chr) - ord('0')
+            else:
+                num += ord(chr.lower()) - ord('a') + 10
 
-        if NumberTag.width_bit in token.int_suffix:
-            bit_length = num.bit_length()
+        sign_kind = SignKind.unsigned if IntSuffix.unsigned in token.int_suffix else SignKind.default
 
-        elif NumberTag.long in token.int_suffix:
-            bit_length = INT_LONG_BIT_LEN
+        if IntSuffix.width_bit in token.int_suffix:
+            width_expr = IntLitExpr(num.bit_length(), IntType(IntKind.int, SignKind.default))
+            int_type: IntType | BitIntType = BitIntType(width_expr, sign_kind)
+        elif IntSuffix.long_long in token.int_suffix:
+            int_type = IntType(IntKind.long_long, sign_kind)
+        elif IntSuffix.long in token.int_suffix:
+            int_type = IntType(IntKind.long, sign_kind)
+        else:
+            int_type = IntType(IntKind.int, sign_kind)
 
-        elif NumberTag.long_long in token.int_suffix:
-            bit_length = INT_LONG_LONG_BIT_LEN
+        return IntLitExpr(num, int_type)
 
-        if NumberTag.unsigned in token.int_suffix:
-            bit_length += 1
+    def float_expr(self) -> RealFloatLitExpr | DecFloatLitExpr | ErrorCode:
+        token: Token = self.expect(TokenTag.number_literal, None)
 
-        if num.bit_length() > bit_length:
-            return ErrorCode.E
+        assert token.num_base in float_bases
 
-        return IntLiteralExpr(num, bit_length)
+        num_str: str = self.token_str(token)
+        suffix: FloatSuffix | None = token.float_suffix
 
-    def float_expr(self) -> FloatLitExpr | ErrorCode:
-        pass
+        if suffix is not None:
+            for s in suffix.value:
+                if num_str.endswith(s):
+                    num_str = num_str[:-len(s)]
+                    break
 
-    def num_expr(self) -> IntLiExpr | FloatLitExpr | ErrorCode:
+        if suffix == FloatSuffix.decimal_32:
+            return DecFloatLitExpr(Decimal(num_str), DecimalFloatType(DecimalFloatKind.decimal32))
+        if suffix == FloatSuffix.decimal_64:
+            return DecFloatLitExpr(Decimal(num_str), DecimalFloatType(DecimalFloatKind.decimal64))
+        if suffix == FloatSuffix.decimal_128:
+            return DecFloatLitExpr(Decimal(num_str), DecimalFloatType(DecimalFloatKind.decimal128))
+
+        val = float.fromhex(num_str) if token.num_base == NumberTag.float_hex else float(num_str)
+
+        if suffix == FloatSuffix.float:
+            return RealFloatLitExpr(val, RealFloatType(RealFloatKind.float))
+        if suffix == FloatSuffix.long_double:
+            return RealFloatLitExpr(val, RealFloatType(RealFloatKind.long_double))
+        return RealFloatLitExpr(val, RealFloatType(RealFloatKind.double))
+
+    def num_expr(self) -> IntLitExpr | RealFloatLitExpr | DecFloatLitExpr | ErrorCode:
         assert self.check(TokenTag.number_literal, None)
 
-        if self.peek().num_base in int_base:
+        if self.peek().num_base in int_bases:
             return self.int_expr()
         else:
             return self.float_expr()
@@ -728,42 +763,41 @@ class Parser:
     def char_expr(self) -> CharLitExpr | ErrorCode:
         token: Token = self.expect(TokenTag.char_literal, None)
         token_str: str = self.token_str(token)
-
-        char_expr: str | ErrorCode = StrFormater(token_str).refmt()
-        if isinstance(char_expr, ErrorCode):
-            return char_expr
-
         char_bit_len: int = char_encoding_len[token.encoding]
+
+        char_val: str | ErrorCode = StrFormater(token_str).refmt(char_bit_len)
+        if isinstance(char_val, ErrorCode):
+            return char_val
+
         char_max_val = (1 << char_bit_len) - 1
 
-        for chr in char_expr:
-            if ord(chr) > char_max_val:
+        for c in char_val:
+            if ord(c) > char_max_val:
                 return ErrorCode.E
 
-        return CharLitExpr(char_expr, char_bit_length)
+        char_type = CharType(encoding_to_char_kind[token.encoding], None)
+        return CharLitExpr(char_val, char_type)
 
-    def (self, encoding: EncodingPrefix | None) -> str | ErrorCode:
-
+    def parse_str_token(self) -> str | ErrorCode:
         token: Token = self.expect(TokenTag.string_literal, None)
-        self.token_str(token)
-
-        str_expr = str_expr.encode("utf-8").decode("unicode_escape")
-
+        token_str: str = self.token_str(token)
+        char_bit_len: int = char_encoding_len[token.encoding]
+        return StrFormater(token_str).refmt(char_bit_len)
 
     def str_expr(self) -> StrLitExpr | ErrorCode:
         assert self.check(TokenTag.string_literal, None)
 
-        str_expr_list: list[str] = []
+        str_parts: list[str] = []
         encoding: EncodingPrefix | None = self.peek().encoding
 
         while self.check(TokenTag.string_literal, None):
-            : str | ErrorCode = self.()
-            if isinstance(, ErrorCode):
-                return
+            part: str | ErrorCode = self.parse_str_token()
+            if isinstance(part, ErrorCode):
+                return part
+            str_parts.append(part)
 
-            str_expr_list.append(str_expr)
-
-        return StrLitExpr("".join(str_expr_list), )
+        char_type = CharType(encoding_to_char_kind[encoding], None)
+        return StrLitExpr("".join(str_parts), char_type)
 
 
 
@@ -792,7 +826,7 @@ class Parser:
             case_type: TypeNode | None | ErrorCode = None
 
             if not self.match(TokenTag.keyword, "default"):
-                case_type: = self.type()
+                case_type = self.type()
 
                 if isinstance(case_type, ErrorCode):
                     return case_type
@@ -807,7 +841,7 @@ class Parser:
             if isinstance(case_expr, ErrorCode):
                 return case_expr
 
-            table[case_type_name] = case_expr
+            table[case_type] = case_expr
 
             if not self.match(TokenTag.punctuator, ","):
                 break
@@ -824,7 +858,7 @@ class Parser:
         if isinstance(idx_expr, ErrorCode):
             return idx_expr
 
-        if self.match(TokenTag.punctuator, "]"):
+        if not self.match(TokenTag.punctuator, "]"):
             return ErrorCode.E
 
         return ArraySubExpr(base_expr, idx_expr)
@@ -843,6 +877,8 @@ class Parser:
             arg_expr: ExprNode | ErrorCode = self.expr(min_bp)
             if isinstance(arg_expr, ErrorCode):
                 return arg_expr
+
+            arg_expr_list.append(arg_expr)
 
             if self.match(TokenTag.punctuator, ")"):
                 break
@@ -941,7 +977,7 @@ class Parser:
         init_elems: list[ExprNode | InitNode] = []
 
         if self.match(TokenTag.punctuator, "}"):
-            return InitList(init_list)
+            return InitList(init_elems)
 
         min_bp, _ = self.op_bp(",")
 
@@ -963,7 +999,7 @@ class Parser:
             if isinstance(elem, ErrorCode):
                 return elem
 
-            init_list.append(elem)
+            init_elems.append(elem)
 
             if not self.match(TokenTag.punctuator, ","):
                 break
@@ -971,9 +1007,9 @@ class Parser:
         if not self.match(TokenTag.punctuator, "}"):
             return ErrorCode.E
 
-        return InitList(init_list)
+        return InitList(init_elems)
 
-    def compound_expr(self, expr_type: TypeNode) -> CompundLitExpr | ErrorCode:
+    def compound_expr(self, expr_type: TypeNode) -> CompoundLitExpr | ErrorCode:
         init_list: InitList | ErrorCode = self.init_list()
         if isinstance(init_list, ErrorCode):
             return init_list
@@ -985,16 +1021,16 @@ class Parser:
         if isinstance(val_expr, ErrorCode):
             return val_expr
 
-        return CastExpr(expr_type_name, val_expr)
+        return CastExpr(expr_type, val_expr)
 
     def cast_or_compound_expr(self) -> CastExpr | CompoundLitExpr | ErrorCode:
-        self.expect(TokenTag.punctuator, "("):
+        self.expect(TokenTag.punctuator, "(")
 
         expr_type: TypeNode | ErrorCode = self.type()
         if isinstance(expr_type, ErrorCode):
             return expr_type
 
-        if not match(TokenTag.punctuator, ")"):
+        if not self.match(TokenTag.punctuator, ")"):
             return ErrorCode.E
 
         if self.check(TokenTag.punctuator, "{"):
@@ -1051,7 +1087,7 @@ class Parser:
     def paren_expr(self) -> ExprNode | ErrorCode:
         self.expect(TokenTag.punctuator, "(")
 
-        expr: ExprNode | ErrorCode = self.expr()
+        expr: ExprNode | ErrorCode = self.expr(0)
         if isinstance(expr, ErrorCode):
             return expr
 
@@ -1060,18 +1096,18 @@ class Parser:
 
         return expr
 
-    def paren_or_cast_or_compound_expr(self) -> None:
+    def paren_or_cast_or_compound_expr(self) -> ExprNode | ErrorCode:
         assert self.check(TokenTag.punctuator, "(")
 
         token: Token | None = self.peek_nth(1)
 
         if token is None:
-            return ErrorCode.
+            return ErrorCode.E
 
         if self.token_is_type(token):
             return self.cast_or_compound_expr()
         else:
-            return self.parent_expr()
+            return self.paren_expr()
 
     # NOTE: The term "nud" referes to [nu]ll [d]enotation.
     #
@@ -1086,13 +1122,17 @@ class Parser:
     # It is a standalone entity that carries its own meaning and can
     # initiate a thought without needing prior context.
     def expr_nud(self) -> ExprNode | ErrorCode:
+        if self.check(TokenTag.keyword, "nullptr"):
+            self.fetch()
+            return NullPtrLitExpr()
+
         if self.check(TokenTag.identifier, None):
             return self.iden_expr()
 
         if self.check(TokenTag.number_literal, None):
             return self.num_expr()
 
-        if self.check(Token.char_literal, None):
+        if self.check(TokenTag.char_literal, None):
             return self.char_expr()
 
         if self.check(TokenTag.string_literal, None):
@@ -1136,7 +1176,7 @@ class Parser:
     # to have any meaning.
     def expr_led(self,
                  left_expr: ExprNode,
-                 min_bp: int) -> ExprNode | ErrorCode:
+                 min_bp: int) -> ExprNode | Error:
         if self.check(TokenTag.punctuator, "("):
             return self.call_expr(left_expr)
 
@@ -1161,20 +1201,20 @@ class Parser:
             if not self.match(TokenTag.punctuator, op.value):
                 continue
 
-            right_expr: ExprNode | ExprNode = self.expr(min_bp)
-            if isinstance(right_expr, ErrorCode):
+            right_expr: ExprNode | Error = self.expr(min_bp)
+            if isinstance(right_expr, Error):
                 return right_expr
 
             return OpExpr(op, [left_expr, right_expr])
 
-        return ErrorCode.E
+        return Error()
 
     # Pratt expression parser:
     # Consumes tokens as long as their left binding power (l_bp)
     # exceeds the current min_bp.
-    def expr(self, min_bp: int) -> ExprNode | ErrorCode:
-        left_expr: ExprNode | ErrorCode = self.expr_nud()
-        if isinstance(left_expr, ErrorCode):
+    def expr(self, min_bp: int) -> ExprNode | Error:
+        left_expr: ExprNode | Error = self.expr_nud()
+        if isinstance(left_expr, Error):
             return left_expr
 
         while True:
@@ -1183,13 +1223,13 @@ class Parser:
                 break
 
             left_expr = self.expr_led(left_expr, r_bp)
-            if isinstance(left_expr, ErrorCode):
+            if isinstance(left_expr, Error):
                 return left_expr
 
         return left_expr
 
     # Statements.
-    # NOTE: Using built-in statements for "assert" and "println" helps us
+    # Using built-in statements for "assert" and "println" helps us
     # bypass two hurdles:
     #
     # - First, it removes the need for a preprocessor (which we don't
@@ -1201,327 +1241,350 @@ class Parser:
     #
     # It's a pragmatic shortcut to give users verification power
     # early on.
+
+    FmtSpec = tuple[StrLitExpr | None, list[ExprNode]]
+
     def fmt_spec(self) -> FmtSpec | ErrorCode:
-        str_expr: StrLitExpr | None | ErrorCode = None
+        str_expr: StrLitExpr | None = None
+        arg_exprs: list[ExprNode] = []
 
-        if self.match(TokenTag.punctuator, ","):
-            str_expr = self.str_expr()
+        if not self.match(TokenTag.punctuator, ","):
+            return (str_expr, arg_exprs)
 
-            if isinstance(str_expr, ErrorCode):
-                return str_expr
-
-        arg_exprs: list[ExprNode] | ErrorCode = []
-
-        if self.match(TokenTag.punctuator, ","):
-            arg_exprs = self.
-            if isinstance(str_expr, ErrorCode):
-                return str_expr
-
-        return (str_expr, arg_exprs)
-
-    def println_stmt(self) -> PrintLnStmt | ErrorCode:
-        self.expect(TokenTag.keyword, "println")
-
-        if not self.match(TokenTag.punctuator, "("):
-            return ErrorCode.E
-
-        result: FmtSpec | ErrorCode = self.fmt_spec()
-        if isinstance(result, ErrorCode):
-            return result
-
-        str_expr, arg_exprs = result
-
-        if not self.match(TokenTag.punctuator, ")"):
-            return ErrorCode.E
-
-        return PrintLn(str_expr, arg_exprs)
-
-    def assert_stmt(self) -> AssertStmt | ErrorCode:
-        self.expect(TokenTag.keyword, "assert")
-
-        if not self.match(TokenTag.punctuator, "("):
-            return ErrorCode.E
+        str_expr = self.str_expr()
+        if isinstance(str_expr, Error):
+            return str_expr
 
         min_bp, _ = self.op_bp(",")
 
-        cond_expr: ExprNode | ErrorCode = self.expr(min_bp)
-        if isinstance(cond_expr, ErrorCode):
-            return cond_expr
+        while self.match(TokenTag.punctuator, ","):
+            arg_expr: ExprNode | Error = self.expr(min_bp)
+            if isinstance(arg_expr, Error):
+                return arg_expr
 
-        result: FmtSpec | ErrorCode = self.fmt_spec()
-        if isinstance(result, ErrorCode):
-            return result
+            arg_exprs.append(arg_expr)
 
-        str_expr, arg_exprs = result
+        return (str_expr, arg_exprs)
 
-        if not self.match(TokenTag.punctuator, ")"):
-            return ErrorCode.E
+    def cond(self) -> ExprNode | Error:
+        if not self.match(TokenTag.punctuator, "("):
+            return Error()
 
-        return AssertStmt(cond_expr, str_expr, arg_exprs)
-
-    def compound_stmt(self) -> CompoundStmt | ErrorCode:
-        self.expect(TokenTag.keyword, "{")
-
-        block_items: list[StmtNode] = []
-
-        while not self.check(TokenTag.punctuator, "}"):
-            stmt: StmtNode | ErrorCode = self.stmt()
-            if isinstance(stmt, ErrorCode):
-                return stmt
-
-        self.expect(TokenTag.punctuator, "}")
-
-        return CompoundStmt(block_items)
-
-    def expr_stmt(self) -> ExprStmt | ErrorCode:
-        expr: ExprNode | ErrorCode = self.expr(0)
-        if isinstance(expr, ErrorCode):
+        expr: ExprNode | Error = self.expr(0)
+        if isinstance(expr, Error):
             return expr
 
-        if not self.match(TokenTag.punctuator, ";"):
-            return ErrorCode.E
-
-        return ExprStmt(expr)
-
-    def decl_stmt(self) -> DeclStmt | ErrorCode:
-        # decl: DeclNode | ErrorCode = self.decl()
-        # if isinstance(decl, ErrorCode):
-        #     return decl
-        #
-        # FIX: maybe do not allow this?
-        # if isinstance(decl, FunDecl) and decl.fun_def is not None:
-        #     return DeclStmt(decl)
-
-        return DeclStmt(decl)
-
-    def expr_or_decl_stmt(self) -> ExprStmt | DeclStmt | ErrorCode:
-        if self.match(TokenTag.punctuator, ";"):
-            return ExprStmt(None)
-
-        if self.check_if_type(0):
-            return self.decl_stmt()
-        else
-            return self.expr_stmt()
-
-    def if_stmt(self) -> IfStmt | ErrorCode:
-        self.expect(TokenTag.keyword, "if")
-
-        if not self.match(TokenTag.punctuator, "("):
-            return ErrorCode.E
-
-        cond_expr: ExprNode | ErrorCode = self.expr(0)
-        if isinstance(cond_expr, ErrorCode):
-            return cond_expr
-
         if not self.match(TokenTag.punctuator, ")"):
-            return ErrorCode.E
+            return Error()
 
-        then_stmt: StmtNode | ErrorCode = self.stmt()
-        if isinstance(then_stmt, ErrorCode):
-            return then_stmt
+        return expr
 
-        else_stmt: StmtNode | None = None
-
-        if self.match(TokenTag.keyword, "else"):
-            else_stmt = self.stmt()
-
-            if isinstance(else_stmt, ErrorCode):
-                return else_stmt
-
-        return IfStmt(cond_expr, then_stmt, else_stmt)
-
-    def case_stmt(self) -> CaseLabelStmt | ErrorCode:
-        self.expect(TokenTag.keyword, "case")
-
-        cond_expr: ExprNode | ErrorCode = self.expr(0)
-        if isinstance(cond_expr, ErrorCode):
-            return cond_expr
-
-        if not self.match(TokenTag.punctuator, ":"):
-            return ErrorCode.E
-
-        return CaseLabelStmt(cond_expr)
-
-    def default_stmt(self) -> CaseLabelStmt | ErrorCode:
-        self.expect(TokenTag.keyword, "default")
-
-        if not self.match(TokenTag.punctuator, ":"):
-            return ErrorCode.E
-
-        return CaseLabelStmt(None)
-
-    def switch_stmt(self) -> SwitchStmt | ErrorCode:
-        self.expect(TokenTag.keyword, "switch")
-
-        if not self.match(TokenTag.keyword, "("):
-            return ErrorCode.E
-
-        cond_expr: ExprNode | ErrorCode = self.expr(0)
-        if isinstance(cond_expr, ErrorCode):
-            return cond_expr
-
-        if not self.match(TokenTag.keyword, ")"):
-            return ErrorCode.E
-
-        then_stmt: StmtNode | ErrorCode = self.stmt()
-        if isinstance(then_stmt, ErrorCode):
-            return then_stmt
-
-        return SwitchStmt(cond_expr, then_stmt)
-
-    def while_stmt(self) -> CycleStmt | ErrorCode:
-        self.expect(TokenTag.keyword, "while")
-
-        if not self.match(TokenTag.punctuator, "("):
-            return ErrorCode.E
-
-        cond_expr: ExprNode | ErrorCode = self.expr(0)
-        if isinstance(cond_expr, ErrorCode):
-            return cond_expr
-
-        if not self.match(TokenTag.punctuator, ")"):
-            return ErrorCode.E
-
-        then_stmt: StmtNode | ErrorCode = self.stmt()
-        if isinstance(then_stmt, ErrorCode):
-            return then_stmt
-
-        return CycleStmt(None, cond_expr, then_stmt, None)
-
-    def do_while_stmt(self) -> DoWhileStmt | ErrorCode:
-        self.expect(TokenTag.keyword, "do")
-
-        do_stmt: StmtNode | ErrorCode = self.stmt()
-        if isinstance(do_stmt, ErrorCode):
-            return do_stmt
-
-        if not self.match(TokenTag.keyword, "while"):
-            return ErrorCode.E00
-
-        if not self.match(TokenTag.punctuator, "("):
-            return ErrorCode.E00
-
-        cond_expr: ExprNode | ErrorCode = self.expr(0)
-        if isinstance(cond_expr, ErrorCode):
-            return cond_expr
-
-        if not self.match(TokenTag.punctuator, ")"):
-            return ErrorCode.E00
-
-        if not self.match(TokenTag.punctuator, ";"):
-            return ErrorCode.E00
-
-        return DoWhileStmt(do_stmt, cond_expr)
-
-    def for_stmt(self) -> CycleStmt | ErrorCode:
-        self.expect(TokenTag.keyword, "for")
-
-        if not self.match(TokenTag.punctuator, "("):
-            return ErrorCode.E
-
-        init: ExprNode | DeclNode | None | ErrorCode = None
+    def for_init(self) -> ExprNode | DeclNode | None | Error:
+        init: ExprNode | DeclNode | None | Error = None
 
         if not self.check(TokenTag.punctuator, ";"):
             init = self.expr_or_decl()
 
-            if isinstance(init, ErrorCode):
+            if isinstance(init, Error):
                 return init
 
         if not self.match(TokenTag.punctuator, ";"):
-            return ErrorCode.E
+            return Error()
 
-        cond_expr: ExprNode | None | ErrorCode = None
+        return init
+
+    def for_cond(self) -> ExprNode | None | Error:
+        cond_expr: ExprNode | None | Error = None
 
         if not self.check(TokenTag.punctuator, ";"):
             cond_expr = self.expr(0)
 
-            if isinstance(cond_expr, ErrorCode):
+            if isinstance(cond_expr, Error):
                 return cond_expr
 
         if not self.match(TokenTag.punctuator, ";"):
-            return ErrorCode.E
+            return Error()
 
-        inc_expr: ExprNode | None | ErrorCode = None
+        return cond_expr
+
+    def for_inc(self) -> ExprNode | None | Error:
+        inc_expr: ExprNode | None | Error = None
 
         if not self.check(TokenTag.punctuator, ")"):
             inc_expr = self.expr(0)
 
-            if isinstance(inc_expr, ErrorCode):
+            if isinstance(inc_expr, Error):
                 return inc_expr
 
+        return inc_expr
+
+    def assert_stmt(self) -> AssertStmt | Error:
+        self.expect(TokenTag.keyword, "assert")
+
+        if not self.match(TokenTag.punctuator, "("):
+            return Error()
+
+        min_bp, _ = self.op_bp(",")
+
+        cond_expr: ExprNode | Error = self.expr(min_bp)
+        if isinstance(cond_expr, Error):
+            return cond_expr
+
+        result: FmtSpec | Error = self.fmt_spec()
+        if isinstance(result, Error):
+            return result
+
+        str_expr, arg_exprs = result
+
         if not self.match(TokenTag.punctuator, ")"):
-            return ErrorCode.E00
+            return Error()
 
-        then_stmt = self.stmt()
-        if isinstance(then_stmt, ErrorCode):
-            return ErrorCode.E00
+        if not self.match(TokenTag.punctuator, ";"):
+            return Error()
 
-        return CycleStmt(init, cond_expr, inc_expr, then_stmt)
+        return AssertStmt(cond_expr, str_expr, arg_exprs)
 
-    def goto_stmt(self) -> GotoStmt | ErrorCode:
+    def println_stmt(self) -> PrintLnStmt | Error:
+        self.expect(TokenTag.keyword, "println")
+
+        if not self.match(TokenTag.punctuator, "("):
+            return Error()
+
+        result: FmtSpec | Error = self.fmt_spec()
+        if isinstance(result, Error):
+            return result
+
+        str_expr, arg_exprs = result
+
+        if not self.match(TokenTag.punctuator, ")"):
+            return Error()
+
+        if not self.match(TokenTag.punctuator, ";"):
+            return Error()
+
+        return PrintLnStmt(str_expr, arg_exprs)
+
+    def empty_stmt(self) -> EmptyStmt | Error:
+        self.expect(TokenTag.punctuator, ";")
+        return EmptyStmt()
+
+    def compound_stmt(self) -> CompoundStmt | Error:
+        self.expect(TokenTag.punctuator, "{")
+
+        stmts: list[StmtNode] = []
+
+        while not self.check(TokenTag.punctuator, "}"):
+            stmt: StmtNode | Error = self.stmt()
+            if isinstance(stmt, Error):
+                return stmt
+
+            stmts.append(stmt)
+
+        self.expect(TokenTag.punctuator, "}")
+        return CompoundStmt(stmts)
+
+    def expr_stmt(self) -> ExprStmt | Error:
+        expr: ExprNode | Error = self.expr(0)
+        if isinstance(expr, Error):
+            return expr
+
+        if not self.match(TokenTag.punctuator, ";"):
+            return Error()
+
+        return ExprStmt(expr)
+
+    def decl_stmt(self) -> DeclStmt | Error:
+        decl: DeclNode | Error = self.decl()
+        if isinstance(decl, Error):
+            return decl
+
+        return DeclStmt(decl)
+
+    def expr_or_decl_stmt(self) -> ExprStmt | DeclStmt | Error:
+        if self.token_is_type(self.peek()):
+            return self.decl_stmt()
+        else:
+            return self.expr_stmt()
+
+    def if_stmt(self) -> IfStmt | Error:
+        self.expect(TokenTag.keyword, "if")
+
+        cond_expr: ExprNode | Error = self.cond()
+        if isinstance(cond_expr, Error):
+            return cond_expr
+
+        then_stmt: StmtNode | Error = self.stmt()
+        if isinstance(then_stmt, Error):
+            return then_stmt
+
+        else_stmt: StmtNode | None | Error = None
+
+        if self.match(TokenTag.keyword, "else"):
+            else_stmt = self.stmt()
+
+            if isinstance(else_stmt, Error):
+                return else_stmt
+
+        return IfStmt(cond_expr, then_stmt, else_stmt)
+
+    def case_stmt(self) -> CaseLabelStmt | Error:
+        self.expect(TokenTag.keyword, "case")
+
+        cond_expr: ExprNode | Error = self.expr(0)
+        if isinstance(cond_expr, Error):
+            return cond_expr
+
+        if not self.match(TokenTag.punctuator, ":"):
+            return Error()
+
+        return CaseLabelStmt(cond_expr)
+
+    def default_stmt(self) -> CaseLabelStmt | Error:
+        self.expect(TokenTag.keyword, "default")
+
+        if not self.match(TokenTag.punctuator, ":"):
+            return Error()
+
+        return CaseLabelStmt(None)
+
+    def switch_stmt(self) -> SwitchStmt | Error:
+        self.expect(TokenTag.keyword, "switch")
+
+        cond_expr: ExprNode | Error = self.cond()
+        if isinstance(cond_expr, Error):
+            return cond_expr
+
+        then_stmt: StmtNode | Error = self.stmt()
+        if isinstance(then_stmt, Error):
+            return then_stmt
+
+        return SwitchStmt(cond_expr, then_stmt)
+
+    def while_stmt(self) -> WhileStmt | Error:
+        self.expect(TokenTag.keyword, "while")
+
+        cond_expr: ExprNode | Error = self.cond()
+        if isinstance(cond_expr, Error):
+            return cond_expr
+
+        then_stmt: StmtNode | Error = self.stmt()
+        if isinstance(then_stmt, Error):
+            return then_stmt
+
+        return WhileStmt(cond_expr, then_stmt)
+
+    def do_while_stmt(self) -> DoWhileStmt | Error:
+        self.expect(TokenTag.keyword, "do")
+
+        do_stmt: StmtNode | Error = self.stmt()
+        if isinstance(do_stmt, Error):
+            return do_stmt
+
+        if not self.match(TokenTag.keyword, "while"):
+            return ErrorCode.E
+
+        cond_expr: ExprNode | Error = self.cond()
+        if isinstance(cond_expr, Error):
+            return cond_expr
+
+        if not self.match(TokenTag.punctuator, ";"):
+            return Error()
+
+        return DoWhileStmt(do_stmt, cond_expr)
+
+    def for_stmt(self) -> ForStmt | Error:
+        self.expect(TokenTag.keyword, "for")
+
+        if not self.match(TokenTag.punctuator, "("):
+            return Error()
+
+        init: ExprNode | DeclNode | None | Error = self.for_init()
+        if isinstance(init, Error):
+            return init
+
+        cond_expr: ExprNode | None | Error = self.for_cond()
+        if isinstance(cond_expr, Error):
+            return cond_expr
+
+        inc_expr: ExprNode | None | Error = self.for_inc()
+        if isinstance(inc_expr, Error):
+            return inc_expr
+
+        if not self.match(TokenTag.punctuator, ")"):
+            return Error()
+
+        then_stmt: StmtNode | Error = self.stmt()
+        if isinstance(then_stmt, Error):
+            return then_stmt
+
+        return ForStmt(init, cond_expr, inc_expr, then_stmt)
+
+    def goto_stmt(self) -> GotoStmt | Error:
         self.expect(TokenTag.keyword, "goto")
 
         if not self.check(TokenTag.identifier, None):
-            return ErrorCode.E
+            return Error()
 
-        label_iden: str | ErrorCode = self.iden()
-        if isinstance(label_iden, ErrorCode):
+        label_iden: str | Error = self.iden()
+        if isinstance(label_iden, Error):
             return label_iden
 
         if not self.match(TokenTag.punctuator, ";"):
-            return ErrorCode.E
+            return Error()
 
         return GotoStmt(label_iden)
 
-    def label_stmt(self) -> LabelStmt:
-        iden: str | ErrorCode = self.iden()
-        if isinstance(iden, ErrorCode):
+    def label_stmt(self) -> LabelStmt | Error:
+        iden: str | Error = self.iden()
+        if isinstance(iden, Error):
             return iden
 
-        self.expect(TokenTag.punctuator, ";")
-
+        self.expect(TokenTag.punctuator, ":")
         return LabelStmt(iden)
 
-    def break_stmt(self) -> BreakStmt | ErrorCode:
+    def break_stmt(self) -> BreakStmt | Error:
         self.expect(TokenTag.keyword, "break")
 
         if not self.match(TokenTag.punctuator, ";"):
-            return ErrorCode.E
+            return Error()
 
         return BreakStmt()
 
-    def continue_stmt(self) -> ContinueStmt | ErrorCode:
+    def continue_stmt(self) -> ContinueStmt | Error:
         self.expect(TokenTag.keyword, "continue")
 
         if not self.match(TokenTag.punctuator, ";"):
-            return ErrorCode.E00
+            return Error()
 
         return ContinueStmt()
 
-    def return_stmt(self) -> ReturnStmt | ErrorCode:
+    def return_stmt(self) -> ReturnStmt | Error:
         self.expect(TokenTag.keyword, "return")
 
-        ret_expr: ExprNode | None | ErrorCode = None
+        ret_expr: ExprNode | None | Error = None
 
         if not self.check(TokenTag.punctuator, ";"):
             ret_expr = self.expr(0)
 
-            if isinstance(ret_expr, ErrorCode):
+            if isinstance(ret_expr, Error):
                 return ret_expr
 
         if not self.match(TokenTag.punctuator, ";"):
-            return ErrorCode.E00
+            return Error()
 
         return ReturnStmt(ret_expr)
 
-    def stmt(self) -> Stmt | ErrorCode:
+    def stmt(self) -> Stmt | Error:
         if self.check(TokenTag.keyword, "assert"):
             return self.assert_stmt()
 
         if self.check(TokenTag.keyword, "println"):
             return self.println_stmt()
 
-        if self.check(TokenTag.keyword, "{"):
+        if self.check(TokenTag.punctuator, ";"):
+            return self.empty_stmt()
+
+        if self.check(TokenTag.punctuator, "{"):
             return self.compound_stmt()
 
         if self.check(TokenTag.keyword, "if"):
@@ -1563,13 +1626,12 @@ class Parser:
 
         return self.expr_or_decl_stmt()
 
-    def parse(self) -> TransUnitDecl | ErrorCode:
+    def parse(self) -> TransUnitDecl | Error:
         decls: list[DeclNode] = []
 
         while not self.check(TokenTag.eof, None):
-            decl: DeclNode | ErrorCode = self.decl()
-
-            if isinstance(decl, ErrorCode):
+            decl: DeclNode | Error = self.decl()
+            if isinstance(decl, Error):
                 return decl
 
             decls.append(decl)
@@ -2888,7 +2950,7 @@ def test_simple_code() -> None:
     test_simple_code_failure()
 
 
-def test() -> None:
+def test_parser() -> None:
     test_expr()
     test_decl()
     test_stmt()
@@ -2896,7 +2958,7 @@ def test() -> None:
 
 
 if __name__ == "__main__":
-    test()
+    test_parser()
 
 
 # will support auto

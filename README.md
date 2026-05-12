@@ -11,19 +11,22 @@
   </p>
 </div>
 
+Even a tiny spark can start a large fire. [Flint] makes sure you're
+the one holding the torch.
+
 ## What is Flint?
 Programming in languages like C is challenging for beginners because
 many errors are difficult to detect, trace, or debug — even
 experienced programmers can spend hours diagnosing them.
 
 [Flint] is an interpreter that explicitly models a subset of [C23] and
-converts certain undefined behaviors into raised exceptions. Designed
+provides defined semantics for undefined behaviors. Designed
 primarily for educational purposes, [Flint] is written in [Python] in
 a straightforward manner so that students can also learn by reading
 the source code.
 
 > [!WARNING]
-> Flint is still a work in progress! A significant amount of
+> [Flint] is still a work in progress! A significant amount of
 development is required before the project reaches its **official Beta
 release**.
 
@@ -78,22 +81,38 @@ the smallest possible footprint to preserve educational clarity.
 
 ```bash
 flint/
-├── flint.py          # Main entry point; bootstraps the interpreter
-├── cli.py            # CLI logic and argument parsing
-├── cli_msgs.py       # CLI help text and user-facing messages
-├── tokenizer.py      # Lexical analysis; converts source to tokens
-├── parser.py         # Syntactic analysis; builds the AST
-├── flint_ast.py      # AST node structures and definitions
-├── eval.py           # Tree-walking interpreter and execution
-├── analysis.py       # Semantic analysis and type checking
-├── format.py         # Source code auto-formatter
-├── error.py          # Error handling and diagnostic reporting
-├── colors.py         # ANSI terminal styling and output formatting
-├── common.py         # Shared constants and utility functions
-├── repl.py           # Interactive Read-Eval-Print Loop
-├── build.py          # Build and packaging scripts
-├── tests/            # Test suite
+# --- Entry Points & Interface ---
+├── flint.py           # Main entry point — bootstraps the interpreter.
+├── cli.py             # CLI logic and argument parsing.
+├── cli_messages.py    # CLI help text and user-facing messages.
+├── build.py           # # AST Constructor — builds AST per specification.
+├── format.py          # Source code auto-formatter.
+└── repl.py            # Interactive Read-Eval-Print Loop.
+
+# --- Analysis ---
+├── tokenizer.py       # Lexical analysis — converts source to tokens.
+├── parser.py          # Syntactic analysis — builds the AST.
+├── flint_ast.py       # AST node structures and definitions.
+└── eval.py            # Tree-walking interpreter and execution logic.
+
+# --- Execution ---
+├── analysis.py        # Semantic analysis and type checking.
+├── memory.py          # Memory model.
+└── value_objects.py   # Runtime objects used during AST evaluation.
+
+# --- Support & Utilities ---
+├── error.py           # Error handling and diagnostic reporting.
+├── colors.py          # ANSI terminal styling and output formatting.
+└── common.py          # Shared constants and utility functions.
+
+# --- Assets ---
+└── tests/             # Comprehensive test suite.
+
+# --- Identity ---
+├── flint_logo.png
 ├── README.md
 ├── INSTALL.md
+├── CONTRIBUTING.md
+├── CODE_OF_CONDUCT.md
 └── LICENSE-MIT
 ```

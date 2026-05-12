@@ -3,27 +3,29 @@ import sys
 from error import *
 from flint_ast import AST
 
+# Builder
+#
+
 
 class Builder:
     def __init__(self, save_comments: bool, file_name: str) -> None:
-        # save comments in ast for the formater...
-        self.store_comments = save_comments
+        self.save_comments = save_comments
 
     def build_source(self, source_code: str) -> AST | Error:
         ast = AST(source_code)
 
-        result = ast.build()
-        if isinstance(result, ErrorCode):
+        result = ast.build(save_comments)
+        if isinstance(result, Error):
             return result
 
         result = ast.analyze()
-        if isinstance(result, ErrorCode):
+        if isinstance(result, Error):
             return result
 
-        ast.normalize()
+        ast.optimize()
         return ast
 
-    def build_file(self, file_name) -> AST | Error:
+    def build_file(self, file_name: str) -> AST | Error:
         # Use try-except approach to catch underlying OS errors
         # and format them into user-friendly error messages.
 
@@ -34,28 +36,22 @@ class Builder:
                 source_code = file.read()
 
                 # Translation phase 2.
-                source_code = source_code.replace("\\\n", "")
-
-                # NOTE: Potentially rewrite the tokenizer as a single
-                # deterministic state machine to process the file in
-                # a single pass. This would include more precise token
-                # tagging to better define the loaded sequence.
-                #
-                # Although the tokenizer implementation would be more
-                # complex, it will simplify downstream phases
-                # and prevent several classes of potential issues
-                # (e.g. translation phase 2).
+                # source_code = source_code.replace("\\\n", "")
 
         except FileNotFoundError:
-            return ErrorCode.E
+            return Error()
 
         except PermissionError:
-            return ErrorCode.E
+            return Error()
 
         except UnicodeDecodeError as e:
-            return ErrorCode.E
+            return Error()
 
         except OSError as e:
-            return ErrorCode.E
+            return Error()
+
+        # Translation phase 2.
+        if source_code.find("\\\n") != -1:
+            return Error()
 
         return self.build_source(source_code)

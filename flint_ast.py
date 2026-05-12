@@ -1,47 +1,90 @@
 from enum import Enum
-import numpy as np
-from typing import TypeVar, Generic
+from decimal import Decimal
 
-from error import ErrorCode
-from tokenizer import TokenTag, NumberTag
+from error import *
 from parser import Parser
+from tokenizer import TokenTag, NumberTag
+
+# Abstract Syntax Tree
+# Represents the hierarchical logical structure of the source code.
+#
+# NOTE: The AST omits concrete syntactic details (e.g. parentheses or
+# semicolons) to purely focus on language semantics.
+#
+# Analogy (Natural Language):
+# 1. Tokenizer: Sees a string of letters and separates them into
+#    distinct words and marks.
+# 2. Parser: Figures out how those words fit together according to
+#    the rules of language. It identifies which word is the actor and
+#    which is the action.
+# 3. Abstract Syntax Tree: Throws away the "flavor" words and
+#    punctuation to focus entirely on the core intent — "Who-Does-What".
 
 
-non_supported: set[TokenTag] = {
+FORMAT_SPEC: str = "{}"
 
+COMMENT_TAGS: set[TokenTag] = {
+    TokenTag.line_comment,
+    TokenTag.multi_line_comment
 }
 
-ParamSpec = tuple[str | None, TypeNode]
-
-EnumValueSpec = tuple[str, ExprNode | None]
-
-MemberSpec = tuple[str, TypeNode]
-StructOrUnionSpec = tuple[str | None, list[MemberSpec] | None]
-
-FmtSpec = tuple[StrLitExpr | None, list[ExprNode]]
-
-Designator = InitNode | None
-InitValue = ExprNode | InitNode | None
+NOT_SUPPORTED_TAGS: set[TokenTag] = {
+}
 
 
-class PrimitiveType(Type, Enum):
-    bool = "bool"
-    char = "char"
-    short = "short"
-    int = "int"
-    long = "long"
-    long_long = "long long"
-    float = "float"
-    double = "double"
-    long_double = "long double"
-    void = "void"
-    bit_int = "_BitInt"
-    decimal_32 = "_Decimal32"
-    decimal_64 = "_Decimal64"
-    decimal_128 = "_Decimal128"
-    complex = "_Complex"
+# Abstract syntax tree nodes.
+class ASTNode:
+    pass
 
 
+class InitNode(ASTNode):
+    pass
+
+
+class TypeNode(ASTNode):
+    pass
+
+
+class ExprNode(ASTNode):
+    pass
+
+
+class DeclNode(ASTNode):
+    pass
+
+
+class StmtNode(ASTNode):
+    pass
+
+
+# Initialisers.
+class InitMember(InitNode):
+    def __init__(self,
+                 member_iden: str,
+                 rec_init: InitNode | None,
+                 expr_or_init: ExprNode | InitNode | None) -> None:
+        self.member_iden = member_iden
+        self.rec_init = rec_init
+        self.expr_or_init = expr_or_init
+
+
+class InitIndex(InitNode):
+    def __init__(self,
+                 idx_expr: ExprNode,
+                 rec_init: InitNode | None,
+                 expr_or_init: ExprNode | InitNode | None) -> None:
+        self.idx_expr = idx_expr
+        self.rec_init = rec_init
+        self.expr_or_init = expr_or_init
+
+
+class InitList(InitNode):
+    def __init__(self,
+                 init_elems: list[ExprNode | InitNode]) -> None:
+        self.init_elems = init_elems
+
+
+# Type specifiers.
 class TypeQualifier(Enum):
     const = "const"
     restrict = "restrict"
@@ -49,17 +92,200 @@ class TypeQualifier(Enum):
     atomic = "_Atomic"
 
 
-class TypeStorage(Enum):
+class StorageSpec(Enum):
     auto = "auto"
     constexpr = "constexpr"
     extern = "extern"
     register = "register"
     static = "static"
-    thread_local = "_Thread_local"
+    thread_local = "thread_local"
     typedef = "typedef"
 
 
+class FunctionSpec(Enum):
+    inline = "inline"
+    noreturn = "_Noreturn"
 
+
+class SignKind(Enum):
+    signed = "signed"
+    unsigned = "unsigned"
+    default = ""
+
+
+class IntKind(Enum):
+    short = "short"
+    int = "int"
+    long = "long"
+    long_long = "long long"
+
+
+class CharKind(Enum):
+    char = "char"
+    wchar = "wchar_t"
+    char8 = "char8_t"
+    char16 = "char16_t"
+    char32 = "char32_t"
+
+
+class RealFloatKind(Enum):
+    float = "float"
+    double = "double"
+    long_double = "long double"
+
+
+class DecimalFloatKind(Enum):
+    decimal32 = "_Decimal32"
+    decimal64 = "_Decimal64"
+    decimal128 = "_Decimal128"
+
+
+# Types.
+class VoidType(TypeNode):
+    pass
+
+
+class BoolType(TypeNode):
+    pass
+
+
+class NullPtrType(TypeNode):
+    pass
+
+
+class IntType(TypeNode):
+    def __init__(self, kind: IntKind, sign_kind: SignKind) -> None:
+        self.kind = kind
+        self.sign_kind = sign_kind
+
+
+class BitIntType(TypeNode):
+    def __init__(self,
+                 width_expr: ExprNode,
+                 sign_kind: SignKind) -> None:
+        self.width_expr = width_expr
+        self.sign_kind = sign_kind
+
+
+class CharType(TypeNode):
+    def __init__(self,
+                 kind: CharKind,
+                 sign_kind: SignKind | None) -> None:
+        self.kind = kind
+        self.sign_kind = sign_kind
+
+
+class RealFloatType(TypeNode):
+    def __init__(self, kind: RealFloatKind) -> None:
+        self.kind = kind
+
+
+class DecimalFloatType(TypeNode):
+    def __init__(self, kind: DecimalFloatKind) -> None:
+        self.kind = kind
+
+
+class ComplexType(TypeNode):
+    def __init__(self, kind: RealFloatKind) -> None:
+        self.kind = kind
+
+
+class ImaginaryType(TypeNode):
+    def __init__(self, kind: RealFloatKind) -> None:
+        self.kind = kind
+
+
+class PtrType(TypeNode):
+    def __init__(self,
+                 pointee: TypeNode,
+                 qualifiers: set[TypeQualifier]) -> None:
+        self.pointee = pointee
+        self.qualifiers = qualifiers
+
+
+# Have to cover:
+# • T[N]         — constant-length array
+# • T[expr]      — VLA with a runtime bound
+# • T[]          — incomplete array (elem_count = None)
+# • T[*]         — VLA of unspecified size in a prototype (is_unspec_vla)
+# • T[static N]  — minimum-size hint for pointers (is_static = True)
+class ArrayType(TypeNode):
+    def __init__(self,
+                 elem_type: TypeNode,
+                 elem_count: ExprNode | None,
+                 is_static: bool,
+                 is_unspec_vla: bool,
+                 qualifiers: set[TypeQualifier]) -> None:
+        self.elem_type = elem_type
+        self.elem_count = elem_count
+        self.is_static = is_static
+        self.is_unspec_vla = is_unspec_vla
+        self.qualifiers = qualifiers
+
+
+class ParamSpec:
+    def __init__(self, iden: str | None, param_type: TypeNode) -> None:
+        self.iden = iden
+        self.param_type = param_type
+
+
+class FunType(TypeNode):
+    def __init__(self,
+                 ret_type: TypeNode,
+                 params: list[ParamSpec],
+                 is_variadic: bool) -> None:
+        self.ret_type = ret_type
+        self.params = params
+        self.is_variadic = is_variadic
+
+
+class EnumType(TypeNode):
+    def __init__(self, iden: str) -> None:
+        self.iden = iden
+
+
+class StructType(TypeNode):
+    def __init__(self, iden: str) -> None:
+        self.iden = iden
+
+
+class UnionType(TypeNode):
+    def __init__(self, iden: str) -> None:
+        self.iden = iden
+
+
+class AtomicType(TypeNode):
+    def __init__(self, base_type: TypeNode) -> None:
+        self.base_type = base_type
+
+
+class TypeOfType(TypeNode):
+    def __init__(self, expr_or_type: ExprNode | TypeNode) -> None:
+        self.expr_or_type = expr_or_type
+
+
+class TypeOfUnqualType(TypeNode):
+    def __init__(self, expr_or_type: ExprNode | TypeNode) -> None:
+        self.expr_or_type = expr_or_type
+
+
+class QualifiedType(TypeNode):
+    def __init__(self,
+                 base_type: TypeNode,
+                 qualifiers: set[TypeQualifier],
+                 storage: StorageSpec | None,
+                 alignment: ExprNode | TypeNode | None,
+                 fun_spec: FunctionSpec | None) -> None:
+        assert not isinstance(base_type, QualifiedType)
+
+        self.base_type = base_type
+        self.qualifiers = qualifiers
+        self.storage = storage
+        self.alignment = alignment
+        self.fun_spec = fun_spec
+
+
+# Operators.
 class OpTag(Enum):
     pass
 
@@ -118,7 +344,7 @@ class BinOpTag(OpTag):
     # lhs >= rhs
     ge = ">="
     # lhs == rhs
-    eq = "==",
+    eq = "=="
     # lhs != rhs
     ne = "!="
     # lhs ^ rhs
@@ -132,123 +358,78 @@ class BinOpTag(OpTag):
     # lhs = rhs
     assign = "="
     # lhs *= rhs
-    mul = "*="
+    mul_assign = "*="
     # lhs /= rhs
-    div = "/="
+    div_assign = "/="
     # lhs %= rhs
-    mod = "%="
+    mod_assign = "%="
     # lhs += rhs
-    add = "+="
+    add_assign = "+="
     # lhs -= rhs
-    sub = "-="
+    sub_assign = "-="
     # lhs <<= rhs
-    shl = "<<="
+    shl_assign = "<<="
     # lhs >>= rhs
-    shr = ">>="
+    shr_assign = ">>="
     # lhs &= rhs
-    bit_and = "&="
+    bit_and_assign = "&="
     # lhs ^= rhs
-    bit_xor = "^="
+    bit_xor_assign = "^="
     # lhs |= rhs
-    bit_or = "|="
-
-
-# Abstract syntax tree nodes.
-class ASTNode:
-    pass
-
-
-class InitNode(ASTNode):
-    pass
-
-
-class ExprNode(ASTNode):
-    pass
-
-
-class DeclNode(ASTNode);
-    pass
-
-
-class StmtNode(ASTNode):
-    pass
-
-
-# Types.
-class Type:
-    pass
-
-# change representation, probably tree
-class TypeName:
-    def __init__(self,
-                 type: Type,
-                 storage_spec: TypeStorage,
-                 qualifier_specs: list[TypeQualifier],
-                 align_spec: int | None) -> None:
-        self.type = type
-        self.storage_spec = storage_spec
-        self.qualifier_specs = qualifier_specs
-
-        self.align_spec = align_spec
-        # self.funtion_spec = funtion_spec
-
-
-class PointerType(Type):
-    def __init__(self, ref_type: TypeName) -> None:
-        self.ref_type = ref_type
-
-
-class ArrayType(Type):
-    def __init__(self,
-                 elem_type: TypeName,
-                 elem_count: int | None) -> None:
-        self.elem_type = elem_type
-        self.elem_count = elem_count
-
-
-
-
-
-
-
+    bit_or_assign = "|="
 
 
 # Expressions.
 class IdenExpr(ExprNode):
-    def __init__(self, name: str) -> None:
-        self.name = name
+    def __init__(self, iden: str) -> None:
+        self.iden = iden
+
+
+class NullPtrLitExpr(ExprNode):
+    pass
 
 
 class IntLitExpr(ExprNode):
-    def __init__(self, int_expr: int, bit_length: int) -> None:
+    def __init__(self,
+                 int_expr: int,
+                 int_type: IntType | BitIntType) -> None:
         self.int_expr = int_expr
-        self.bit_length = bit_length
+        self.int_type = int_type
 
 
-class FloatLitExpr(ExprNode):
-    def __init__(self, float_expr: np.floating, bit_length: int) -> None:
+class RealFloatLitExpr(ExprNode):
+    def __init__(self,
+                 float_expr: float,
+                 float_type: RealFloatType) -> None:
         self.float_expr = float_expr
-        self.bit_length = bit_length
+        self.float_type = float_type
+
+
+class DecFloatLitExpr(ExprNode):
+    def __init__(self,
+                 float_expr: Decimal,
+                 float_type: DecimalFloatType) -> None:
+        self.float_expr = float_expr
+        self.float_type = float_type
 
 
 class CharLitExpr(ExprNode):
-    def __init__(self, char_expr: str, char_bit_length: int) -> None:
+    def __init__(self, char_expr: str, char_type: CharType) -> None:
         self.char_expr = char_expr
-        self.char_bit_length = char_bit_length
-
+        self.char_type = char_type
 
 class StrLitExpr(ExprNode):
-    def __init__(self, str_expr: str, char_bit_length: int) -> None:
+    def __init__(self, str_expr: str, char_type: CharType) -> None:
         self.str_expr = str_expr
-        self.char_bit_length = char_bit_length
+        self.char_type = char_type
 
 
 class GenericSelExpr(ExprNode):
     def __init__(self,
-                 expr: ExprNode,
-                 table: dict[Type | None, ExprNode]) -> None:
-        self.expr = expr
-        self.table = table
+                 ctrl_expr: ExprNode,
+                 assoc_table: dict[TypeNode | None, ExprNode]) -> None:
+        self.ctrl_expr = ctrl_expr
+        self.assoc_table = assoc_table
 
 
 class ArraySubExpr(ExprNode):
@@ -260,9 +441,9 @@ class ArraySubExpr(ExprNode):
 class CallExpr(ExprNode):
     def __init__(self,
                  callee_expr: ExprNode,
-                 arg_expr_list: list[ExprNode]) -> None:
+                 arg_exprs: list[ExprNode]) -> None:
         self.callee_expr = callee_expr
-        self.arg_expr_list = arg_expr_list
+        self.arg_exprs = arg_exprs
 
 
 class MemberExpr(ExprNode):
@@ -275,48 +456,20 @@ class MemberExpr(ExprNode):
         self.is_arrow = is_arrow
 
 
-class InitMember(InitNode):
-    def __init__(self,
-                 member_iden: str,
-                 rec_init: InitNode | None,
-                 assign_expr_or_init: ExprNode | InitNode | None) -> None:
-        self.member_iden = member_iden
-        self.rec_init = rec_init
-        self.assign_expr_or_init = expr_or_init
-
-
-class InitIndex(InitNode):
-    def __init__(self,
-                 idx_expr: ExprNode,
-                 rec_init: InitNode | None,
-                 assign_expr_or_init: ExprNode | InitNode | None) -> None:
-        self.idx_expr = idx_expr
-        self.rec_init = rec_init
-        self.assign_expr_or_init = expr_or_init
-
-
-class InitList(InitNode):
-    def __init__(self,
-                 init_elems: list[ExprNode | InitNode]) -> None:
-        self.init_elems = init_elems
-
-
 class CompoundLitExpr(ExprNode):
     def __init__(self,
                  expr_type: TypeNode,
-                 init_list: InitNode) -> None:
+                 init: InitNode) -> None:
         self.expr_type = expr_type
-        self.init_list = init_list
+        self.init = init
 
 
 class CastExpr(ExprNode):
     def __init__(self,
-                 is_explicit: bool,
                  expr_type: TypeNode,
-                 val_expr: ExprNode) -> None:
-        self.is_explicit = is_explicit
+                 expr: ExprNode) -> None:
         self.expr_type = expr_type
-        self.val_expr = val_expr
+        self.expr = expr
 
 
 class OpExpr(ExprNode):
@@ -336,19 +489,9 @@ class CondExpr(ExprNode):
         self.false_expr = false_expr
 
 
-class AssignmentExpr(ASTNode):
-    def __init__(self,
-                 op: AssignOpTag,
-                 var_expr: ExprNode,
-                 val_expr: ExprNode) -> None:
-        self.op = op
-        self.var_expr = var_expr
-        self.val_expr = val_expr
-
-
 class CommaExpr(ExprNode):
-    def __init__(self, expr: tuple[ExprNode, ExprNode]) -> None:
-        self.expr = expr
+    def __init__(self, exprs: tuple[ExprNode, ExprNode]) -> None:
+        self.exprs = exprs
 
 
 class SizeOfExpr(ExprNode):
@@ -361,26 +504,7 @@ class AlignOfExpr(ExprNode):
         self.align_type = align_type
 
 
-
-
-
-
 # Declarations.
-class TypeOfSpec():
-    def __init__(self, expr_or_type: ExprNode | TypeNode) -> None:
-        self.expr_or_type = expr_or_type
-
-
-class TypeOfUnqualSpec():
-    def __init__(self, expr_or_type: ExprNode | TypeNode) -> None:
-        self.expr_or_type = expr_or_type
-
-
-class AlignAsSpec():
-    def __init__(self, expr_or_type: ExprNode | TypeNode) -> None:
-        self.expr_or_type = expr_or_type
-
-
 class TransUnitDecl(DeclNode):
     def __init__(self, decls: list[DeclNode]) -> None:
         self.decls = decls
@@ -388,55 +512,73 @@ class TransUnitDecl(DeclNode):
 
 class VarDecl(DeclNode):
     def __init__(self,
-                 var_type: TypeNode,
-                 var_iden: str,
+                 var_type: QualifiedType,
+                 iden: str,
                  init: ExprNode | InitList | None) -> None:
         self.var_type= var_type
         self.iden = iden
         self.init = init
 
 
+class ArrayDecl(DeclNode):
+    def __init__(self,
+                 arr_type: ArrayType,
+                 iden: str,
+                 init: InitList | None) -> None:
+        self.arr_type = arr_type
+        self.iden = iden
+        self.init = init
+
+
 class FunDecl(DeclNode):
     def __init__(self,
-                 ret_type: TypeNode,
+                 fun_type: FunType,
                  iden: str,
-                 params: list[tuple[TypeNode, str | None]],
                  body: CompoundStmt | None) -> None:
-        self.ret_type = ret_type
+        self.fun_type = fun_type
         self.iden = iden
-        self.params = params
         self.body = body
+
+
+class EnumValSpec:
+    def __init__(self, iden: str, expr: ExprNode | None) -> None:
+        self.iden = iden
+        self.expr = expr
 
 
 class EnumDecl(DeclNode):
     def __init__(self,
-                 iden: str | None,
-                 members: list[tuple[str, ExprNode | None]] | None,
+                 enum_type: EnumType | None,
+                 members: list[EnumValSpec],
                  member_type: TypeNode | None) -> None:
-        self.iden = iden
+        self.enum_type = enum_type
         self.members = members
         self.member_type = member_type
 
 
 class StructDecl(DeclNode):
     def __init__(self,
-                 iden: str | None,
-                 fields: list[DeclNode] | None) -> None:
-        self.iden = iden
-        self.fields = fields
+                 struct_type: StructType | None,
+                 members: list[DeclNode]) -> None:
+        self.struct_type = struct_type
+        self.members = members
 
 
 class UnionDecl(DeclNode):
     def __init__(self,
-                 iden: str | None,
-                 members: list[DeclNode] | None) -> None:
-        self.iden = iden
+                 union_type: UnionType | None,
+                 members: list[DeclNode]) -> None:
+        self.union_type = union_type
         self.members = members
 
 
 class TypedefDecl(DeclNode):
-    def __init__(self, ) -> None:
-        pass
+    def __init__(self,
+                 underlying_type: QualifiedType,
+                 alias_iden: str) -> None:
+        self.underlying_type = underlying_type
+        self.alias_iden = alias_iden
+
 
 class StaticAssertDecl(DeclNode):
     def __init__(self,
@@ -445,32 +587,9 @@ class StaticAssertDecl(DeclNode):
         self.cond_expr = cond_expr
         self.str_expr = str_expr
 
-# TODO: Missing declarations
-
-
-
-
-
-
-
-class ArrayDecl(DeclNode):
-    def __init__(self, ) -> None:
-        pass
-
-
-
-
-
 
 # Statements.
-class PrintLnStmt(StmtNode):
-    def __init__(self,
-                 str_expr: StrLitExpr | None,
-                 arg_exprs: list[ExprNode]) -> None:
-        self.str_expr = str_expr
-        self.arg_exprs = arg_exprs
-
-
+# Flint build-in statement.
 class AssertStmt(StmtNode):
     def __init__(self,
                  cond_expr: ExprNode,
@@ -481,19 +600,31 @@ class AssertStmt(StmtNode):
         self.arg_exprs = arg_exprs
 
 
-class CompoundStmt(StmtNode):
+# Flint build-in statement.
+class PrintLnStmt(StmtNode):
     def __init__(self,
-                 block_items: list[StmtNode]) -> None:
-        self.block_items = block_items
+                 str_expr: StrLitExpr | None,
+                 arg_exprs: list[ExprNode]) -> None:
+        self.str_expr = str_expr
+        self.arg_exprs = arg_exprs
+
+
+class EmptyStmt(StmtNode):
+    pass
+
+
+class CompoundStmt(StmtNode):
+    def __init__(self, stmts: list[StmtNode]) -> None:
+        self.stmts = stmts
 
 
 class DeclStmt(StmtNode):
-    def __init__(self, decl: DeclNode | None) -> None:
+    def __init__(self, decl: DeclNode) -> None:
         self.decl = decl
 
 
 class ExprStmt(StmtNode):
-    def __init__(self, expr: ExprNode | None) -> None:
+    def __init__(self, expr: ExprNode) -> None:
         self.expr = expr
 
 
@@ -516,18 +647,27 @@ class SwitchStmt(StmtNode):
     def __init__(self,
                  cond_expr: ExprNode,
                  then_stmt: StmtNode) -> None:
+        self.cond_expr = cond_expr
         self.then_stmt = then_stmt
 
 
-class CycleStmt(StmtNode):
+class ForStmt(StmtNode):
     def __init__(self,
                  init_clause: ExprNode | DeclNode | None,
                  cond_expr: ExprNode | None,
-                 inc_expr: StmtNode | None,
-                 then_stmt: StmtNode | None) -> None:
+                 inc_expr: ExprNode | None,
+                 then_stmt: StmtNode) -> None:
         self.init_clause = init_clause
         self.cond_expr = cond_expr
         self.inc_expr = inc_expr
+        self.then_stmt = then_stmt
+
+
+class WhileStmt(StmtNode):
+    def __init__(self,
+                 cond_expr: ExprNode,
+                 then_stmt: StmtNode) -> None:
+        self.cond_expr = cond_expr
         self.then_stmt = then_stmt
 
 
@@ -564,9 +704,9 @@ class ReturnStmt(StmtNode):
 class AST:
     def __init__(self, buffer: str) -> None:
         self.buffer = buffer
-        self.root: ASTRoot | None = None
+        self.root: TransUnitDecl | None = None
 
-    def build(self) -> None | ErrorCode:
+    def build(self, save_comments: bool) -> None | Error:
         tok = Tokenizer(buffer)
         tokens: list[Token] = []
 
@@ -574,22 +714,31 @@ class AST:
             token: Token = tok.next()
 
             if token.tag == TokenTag.invalid:
-                return ErrorCode.E
+                return Error()
 
-            if token.tag in not non_supported:
-                return ErrorCode.E
+            if token.tag in NOT_SUPPORTED_TAGS:
+                return Error()
+
+            if not save_comments and token.tag in COMMENT_TAGS:
+                continue
 
             tokens.append(token)
 
             if token.tag == TokenTag.eof:
                 break
 
-        parser =
+        parser = Parser(buffer, tokens)
 
-    def analyze(self) -> None | ErrorCode:
+        decls: TransUnitDecl | Error = parser.parse()
+        if isinstance(decls, Error):
+            return decls
+
+        self.root = decls
+
+    def analyze(self) -> None | Error:
         pass
 
-    def normalize(self) -> None:
+    def optimize(self) -> None:
         pass
 
     def dump_posfix(self) -> str:
@@ -598,5 +747,19 @@ class AST:
     def dump_tree(self) -> str:
         pass
 
-# TODO: Fix AST initialization
-# TODO: Fix types
+
+def test_dump_posfix() -> None:
+    pass
+
+
+def test_dump_tree() -> None:
+    pass
+
+
+def test_ast() -> None:
+    test_dump_posfix()
+    test_dump_tree()
+
+
+if __name__ == "__main__":
+    test_ast()
