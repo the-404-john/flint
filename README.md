@@ -11,9 +11,6 @@
   </p>
 </div>
 
-Even a tiny spark can start a large fire. [Flint] makes sure you're
-the one holding the torch.
-
 ## What is Flint?
 Programming in languages like C is challenging for beginners because
 many errors are difficult to detect, trace, or debug — even
