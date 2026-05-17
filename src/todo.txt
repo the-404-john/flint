@@ -1,0 +1,89 @@
+# TODO
+
+## Memory Model
+C1.3 — No alignment enforcement anywhere
+
+C23 §6.2.8 mandates that every object be stored at an address satisfying
+its alignment requirement. alloc accepts mem_size but has no alignment
+parameter and enforces nothing. Because blocks are addressed by opaque
+integer IDs there is no real "address" to align, but the offset
+within a block (for struct members, etc.) must still be computed
+correctly. The model delegates all alignment logic to value_objects.py
+and convert.py, but those layers have no way to signal a misalignment
+back to the memory layer as a C23 trap representation.
+
+C1.4 — Effective type and strict aliasing are untracked
+
+C23 §6.5 ¶7 (the strict aliasing rule) requires tracking the effective
+type of each storage region. Currently MemoryBlock.metadata records
+only three states (poison/mine/clean) with no type tag. Writing a float
+value to a region and then reading it back as int is implementation-defined
+(or UB for non-character types), but the memory layer has no way to
+detect or diagnose this.
+
+C1.5 — Thread-local storage has no segment
+
+C23 §6.2.4 ¶7 requires thread-local objects (declared thread_local /
+_Thread_local) to have a distinct storage duration from both automatic
+and static objects. MemoryType has no thread_local entry, so these
+objects cannot be segregated or managed independently.
+
+
+## Scope
+C2.4 — Static-duration block-scope variables survive pop_frame
+
+A static local variable has block scope but static storage duration —
+it is initialized once and lives for the program's entire execution.
+Currently pop_frame calls pop_var for every variable in the frame, which
+will dealloc or sim_dealloc the variable's storage. A static local must
+be excluded from frame teardown and relocated to the data segment.
+
+C2.5 — No linkage model
+
+C23 §6.2.2 defines internal, external, and no linkage. File-scope
+static variables have internal linkage; extern declarations refer
+to external linkage objects. The current scope model treats all names
+as having no linkage, making it impossible to correctly share or
+resolve objects across translation units.
+
+C2.6 — pop_all silently discards errors
+
+pop_all iterates over all frames and calls self.pop_var(var) but never
+checks the return value. A dealloc failure (e.g., double-free
+of a materialized block) is swallowed. Since pop_all is presumably
+called during abnormal termination, silent errors are particularly
+dangerous.
+
+
+## Limits
+C3.1 — float is defined as 8 bytes, identical to double
+
+C23 §5.2.4.2.2 requires FLT_MANT_DIG <= DBL_MANT_DIG. Making float
+and double the same size makes them indistinguishable and breaks
+IEEE 754 binary32 semantics: single-precision rounding, %f/%g format
+specifier behaviour, and any code relying on
+`sizeof(float) < sizeof(double)`.
+
+C3.4 — Alignment is not defined separately from size
+
+limits.py returns only byte sizes. C23 §6.2.8 requires that each type
+have an alignment requirement, which need not equal its size
+(e.g., long double on x86-64 is 16 bytes, alignment 16; on x86 it may
+be 12 bytes, alignment 4). Mixing size and alignment will cause struct
+layout to be computed incorrectly for types where they differ.
+
+
+## Value Objects
+C4.3 — No ComplexTypeObject, ImaginaryTypeObject, ComplexValue, ImaginaryValue
+
+flint_ast.py defines ComplexType and ImaginaryType. C23 Annex G
+(and optionally §6.2.5 ¶11) requires _Complex and _Imaginary types
+for each real floating type. value_objects.py has no counterparts.
+The evaluator can never represent a result of type _Complex double.
+
+C4.8 — StructType does not propagate _Alignas overrides
+
+The alignment padding algorithm in StructType.__init__ uses only
+member_type.alignment. A C23 _Alignas(N) specifier on a member must
+inflate the member type's alignment to max(natural_alignment, N). Since
+TypeObject has no alignas_override field, this is unrepresentable.
