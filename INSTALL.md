@@ -84,6 +84,7 @@ venv\Scripts\activate
 ### 3. Install [Nuitka]
 ```bash
 pip install -U nuitka
+pip install "patchelf>=0.17,<0.18"
 ```
 
 ### 4. Compile
