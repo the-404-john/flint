@@ -7,7 +7,8 @@ using [Nuitka] **the** [Python] compiler.
 > [!IMPORTANT]
 > This document describes building [Flint] from source. This is not
 > recommended if you don't know what you're doing. If you
-> just want to install [Flint], check out the [README.md] instead.
+> just want to run [Flint] right away, see the [Quick Start](#quick-start)
+> section below.
 
 [Flint]: https://github.com/the-404-john/flint
 [Python]: https://www.python.org/
@@ -15,8 +16,40 @@ using [Nuitka] **the** [Python] compiler.
 [README.md]: https://github.com/the-404-john/flint/blob/main/README.md
 
 Table of Contents
+- [Quick Start](#quick-start)
 - [Requirements](#requirements)
 - [Build](#build)
+
+## Quick Start
+
+[Flint] has **zero external Python dependencies**. The interpreter runs
+directly from source with any compatible [Python] installation — no
+build step, no virtual environment, no package manager.
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/the-404-john/flint
+cd flint
+```
+
+### 2. Lazy Run
+
+```bash
+python3 src/flint.py
+```
+
+That's it. To interpret a C file:
+
+```bash
+python3 src/flint.py hello.c
+```
+
+> [!NOTE]
+> Python 3.10 or later is required. Check your version with
+> `python3 --version`.
+
+---
 
 ## Requirements
 
@@ -49,7 +82,7 @@ Need a C compiler with support for [C11].
 - The [clang] compiler on [macOS] X and most [FreeBSD] architectures.
 - On all other platforms, the [gcc] compiler of at least version 5.1.
 
-[C11]: https://cppreference.com/c/11
+[C11]: https://en.cppreference.com/w/c/11
 
 [MinGW64]: https://www.mingw-w64.org/
 [clang]: https://clang.llvm.org/
@@ -82,14 +115,35 @@ venv\Scripts\activate
 ```
 
 ### 3. Install [Nuitka]
+
+**[Linux]** | **[FreeBSD]** | **[NetBSD]**
 ```bash
 pip install -U nuitka
 pip install "patchelf>=0.17,<0.18"
 ```
 
+> [!NOTE]
+> `patchelf` is a Linux/BSD tool used by [Nuitka] to set shared-library
+> RPATHs in the output binary. It is not needed on [macOS] or [Windows].
+
+**[macOS]**
+```bash
+pip install -U nuitka
+```
+
+**[Windows]**
+```cmd
+pip install -U nuitka
+```
+
 ### 4. Compile
+
+All source files live under `src/`, so [Nuitka] must be invoked from
+that directory.
+
 **[Linux]** | **[macOS]** | **[FreeBSD]** | **[NetBSD]**
 ```bash
+cd src
 python3 -m nuitka \
     --onefile \
     --standalone \
@@ -101,6 +155,7 @@ python3 -m nuitka \
 
 **[Windows]**
 ```cmd
+cd src
 python -m nuitka ^
     --onefile ^
     --standalone ^
@@ -110,7 +165,7 @@ python -m nuitka ^
     flint.py
 ```
 
-The compiled binary will be placed in the current directory.
+The compiled binary will be placed in the `src/` directory.
 | **Platform**                                | **Output File** |
 |---------------------------------------------|-----------------|
 | [Linux] \| [macOS] \| [FreeBSD] \| [NetBSD] | `flint.bin`     |
@@ -126,7 +181,7 @@ The compiled binary will be placed in the current directory.
 Copy the binary to `/usr/local/bin`, which is already on `PATH`
 for all users.
 ```bash
-sudo cp flint.bin /usr/local/bin/flint
+sudo cp src/flint.bin /usr/local/bin/flint
 sudo chmod +x /usr/local/bin/flint
 ```
 
@@ -140,8 +195,8 @@ flint --version
 The [macOS] restricts unsigned binaries by default. Run the following
 to remove the quarantine attribute before installing.
 ```bash
-xattr -d com.apple.quarantine flint.bin
-sudo cp flint.bin /usr/local/bin/flint
+xattr -d com.apple.quarantine src/flint.bin
+sudo cp src/flint.bin /usr/local/bin/flint
 sudo chmod +x /usr/local/bin/flint
 ```
 
@@ -153,10 +208,10 @@ flint --version
 
 **[Windows]**
 Create a dedicated directory for local binaries, copy the executable,
-and safely add the directory to your user `PATH` using PowerShell..
+and add the directory to your user `PATH` using PowerShell.
 ```powershell
 mkdir "$env:USERPROFILE\bin"
-copy flint.exe "$env:USERPROFILE\bin\flint.exe"
+copy src\flint.exe "$env:USERPROFILE\bin\flint.exe"
 $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 [Environment]::SetEnvironmentVariable("PATH", "$UserPath;$env:USERPROFILE\bin", "User")
 ```
