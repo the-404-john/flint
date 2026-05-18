@@ -45,7 +45,7 @@ class Error:
         pass
 
     def code(self) -> int:
-        pass
+        return 1
 
     def report(self) -> str:
-        pass
+        return ""

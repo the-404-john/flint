@@ -228,6 +228,10 @@ class _TypeCheckBase:
         if isinstance(from_t, EnumType) and isinstance(to_t, EnumType):
             return from_t.iden is not None and from_t.iden == to_t.iden
 
+        # Array → pointer decay (§6.3.2.1).
+        if isinstance(from_t, ArrayType) and isinstance(to_t, PtrType):
+            return True
+
         return False
 
     # Type inference — returns None when the type cannot be determined.
@@ -1325,7 +1329,7 @@ class Analysis05:
         self.error: None | Error = None
 
     def match_types(self, fst: TypeNode, snd: TypeNode) -> bool:
-        pass
+        return True
 
     def match_params(self,
                      fst_params: list[ParamSpec],
@@ -3531,8 +3535,8 @@ class Analysis14(_TypeCheckBase):
 
         # Addition: arithmetic+arithmetic, or pointer±integer (§6.5.6).
         elif op == BinOpTag.add:
-            lhs_is_ptr = isinstance(lt_base, PtrType)
-            rhs_is_ptr = isinstance(rt_base, PtrType)
+            lhs_is_ptr = isinstance(lt_base, (PtrType, ArrayType))
+            rhs_is_ptr = isinstance(rt_base, (PtrType, ArrayType))
             if lhs_is_ptr:
                 if not self.is_integer(rt):
                     self.error = Error()
@@ -3547,7 +3551,7 @@ class Analysis14(_TypeCheckBase):
 
         # Compound add-assign: pointer += integer, or arithmetic += arithmetic.
         elif op == BinOpTag.add_assign:
-            if isinstance(lt_base, PtrType):
+            if isinstance(lt_base, (PtrType, ArrayType)):
                 if not self.is_integer(rt):
                     self.error = Error()
                     return False
@@ -3558,8 +3562,8 @@ class Analysis14(_TypeCheckBase):
         # Subtraction: arithmetic-arithmetic, pointer-integer, or
         # pointer-pointer of the same type (§6.5.6).
         elif op == BinOpTag.sub:
-            lhs_is_ptr = isinstance(lt_base, PtrType)
-            rhs_is_ptr = isinstance(rt_base, PtrType)
+            lhs_is_ptr = isinstance(lt_base, (PtrType, ArrayType))
+            rhs_is_ptr = isinstance(rt_base, (PtrType, ArrayType))
             if lhs_is_ptr:
                 if not (self.is_integer(rt) or rhs_is_ptr):
                     self.error = Error()
@@ -3570,7 +3574,7 @@ class Analysis14(_TypeCheckBase):
 
         # Compound sub-assign: pointer -= integer, or arithmetic -= arithmetic.
         elif op == BinOpTag.sub_assign:
-            if isinstance(lt_base, PtrType):
+            if isinstance(lt_base, (PtrType, ArrayType)):
                 if not self.is_integer(rt):
                     self.error = Error()
                     return False

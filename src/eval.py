@@ -168,13 +168,13 @@ class Evaluator:
     def step_inc(self) -> None | Error:
         self.step_count += 1
 
-        if self.step_count > self.step_limit:
+        if self.step_limit > 0 and self.step_count > self.step_limit:
             return Error()
 
     def cycle_inc(self, node: ASTNode) -> None | Error:
         self.cycle_count += self.cycle_sim.cycle_cost(node)
 
-        if self.cycle_count > self.cycle_limit:
+        if self.cycle_limit > 0 and self.cycle_count > self.cycle_limit:
             return Error()
 
     def trace(self, node: ASTNode) -> None:
@@ -2211,7 +2211,9 @@ class Evaluator:
         return self.expr(snd_expr)
 
     def expr(self, node: ExprNode) -> ExprResult | Error:
-        self.cycle_inc(node)
+        cycle_result = self.cycle_inc(node)
+        if isinstance(cycle_result, Error):
+            return cycle_result
 
         if isinstance(node, IdenExpr):
             return self.iden_expr(node)
