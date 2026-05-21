@@ -408,14 +408,14 @@ class Analysis01:
         if self.in_loop or self.in_switch:
             return True
 
-        self.error = Error()
+        self.error = Error("error: 'break' statement outside of loop or switch")
         return False
 
     def continue_stmt(self, node: ContinueStmt) -> bool:
         if self.in_loop:
             return True
 
-        self.error = Error()
+        self.error = Error("error: 'continue' statement outside of loop")
         return False
 
     def fun_decl(self, node: FunDecl) -> bool:
@@ -491,20 +491,21 @@ class Analysis02:
 
     def case_stmt(self, node: CaseLabelStmt) -> bool:
         if not self.in_switch:
-            self.error = Error()
+            self.error = Error("error: 'case' label outside of 'switch' statement")
             return False
 
         label: int | None = None
 
         if node.cond_expr is not None:
             if not is_int_constant_expr(node.cond_expr):
-                self.error = Error()
+                self.error = Error("error: 'case' value must be an integer constant expression")
                 return False
 
             label = eval_int_constant_expr(node.cond_expr)
 
         if label in self.labels:
-            self.error = Error()
+            val_str = "default" if label is None else str(label)
+            self.error = Error(f"error: duplicate '{val_str}' label in 'switch'")
             return False
 
         self.labels.add(label)
@@ -515,7 +516,7 @@ class Analysis02:
         prev_labels, self.labels = self.labels, set()
 
         if not is_int_expr(node.cond_expr):
-            self.error = Error()
+            self.error = Error("error: 'switch' condition must be an integer expression")
             return False
 
         if not self.visit(node.then_stmt):
@@ -627,7 +628,7 @@ class Analysis03:
 
     def var_decl(self, node: VarDecl) -> bool:
         if node.iden in self.block_idens:
-            self.error = Error()
+            self.error = Error(f"error: '{node.iden}' is already declared in this scope")
             return False
 
         self.block_idens.add(node.iden)
@@ -663,7 +664,7 @@ class Analysis03:
         tag_id = self.tag_id(node)
 
         if tag_id != self.tag_idens.get(iden, tag_id):
-            self.error = Error()
+            self.error = Error(f"error: '{iden}' used with incompatible tag types")
             return False
 
         self.tag_idens[iden] = self.tag_id(node)
@@ -672,7 +673,7 @@ class Analysis03:
             return True
 
         if iden in self.tag_defs:
-            self.error = Error()
+            self.error = Error(f"error: '{iden}' is already defined")
             return False
 
         self.tag_defs.add(iden)
@@ -687,7 +688,7 @@ class Analysis03:
                 continue
 
             if param.iden in self.block_idens:
-                self.error = Error()
+                self.error = Error(f"error: parameter '{param.iden}' is already declared")
                 return False
 
             self.block_idens.add(param.iden)
@@ -883,7 +884,7 @@ class Analysis04:
 
     def typedef_type(self, node: TypeDefType) -> bool:
         if not self.lookup(node.iden):
-            self.error = Error()
+            self.error = Error(f"error: unknown type name '{node.iden}'")
             return False
 
         return True
@@ -983,7 +984,7 @@ class Analysis04:
     # Expressions.
     def iden_expr(self, node: IdenExpr) -> bool:
         if not self.lookup(node.iden):
-            self.error = Error()
+            self.error = Error(f"error: '{node.iden}' undeclared")
             return False
 
         return True
@@ -1351,15 +1352,15 @@ class Analysis05:
             return True
 
         if not self.match_types(prev_decl.fun_type.ret_type, node.fun_type.ret_type):
-            self.error = Error()
+            self.error = Error(f"error: '{node.iden}' redeclared with conflicting return type")
             return False
 
         if not self.match_params(prev_decl.fun_type.params, node.fun_type.params):
-            self.error = Error()
+            self.error = Error(f"error: '{node.iden}' redeclared with different parameter types")
             return False
 
         if node.body is not None and prev_decl.body is not None:
-            self.error = Error()
+            self.error = Error(f"error: '{node.iden}' defined more than once")
             return False
 
         if node.body is not None:
@@ -1445,7 +1446,7 @@ class Analysis06:
 
     def label_stmt(self, node: LabelStmt) -> bool:
         if node.iden in self.labels:
-            self.error = Error()
+            self.error = Error(f"error: duplicate label '{node.iden}'")
             return False
 
         self.labels.add(node.iden)
@@ -1460,7 +1461,7 @@ class Analysis06:
 
         for goto_label in self.goto_labels:
             if goto_label not in self.labels:
-                self.error = Error()
+                self.error = Error(f"error: 'goto' to undefined label '{goto_label}'")
                 return False
 
         return True
@@ -1737,7 +1738,10 @@ class Analysis07:
                 self._collect_idens_stmt(node, used_idens)
 
         if len(skipped_decls & used_idens) != 0:
-            self.error = Error()
+            skipped = ", ".join(sorted(skipped_decls & used_idens))
+            self.error = Error(
+                f"error: 'goto' jumps over declaration of '{skipped}'"
+            )
             return False
 
         return True
@@ -1824,7 +1828,10 @@ class Analysis08:
 
         count: int = str_lit_expr.str_expr.count(FORMAT_SPEC)
         if len(node.arg_exprs) != count:
-            self.error = Error()
+            self.error = Error(
+                f"error: format string has {count} specifier(s) "
+                f"but {len(node.arg_exprs)} argument(s) provided"
+            )
             return False
 
         return True
@@ -1898,7 +1905,7 @@ class Analysis09:
     def check_type(self, node: TypeNode) -> bool:
         if isinstance(node, TypeDefType):
             if node.iden not in self.typedef_names:
-                self.error = Error()
+                self.error = Error(f"error: unknown type name '{node.iden}'")
                 return False
 
             return True
@@ -1915,7 +1922,7 @@ class Analysis09:
                 return True
 
             if node.iden is not None and node.iden not in self.struct_tags:
-                self.error = Error()
+                self.error = Error(f"error: 'struct {node.iden}' was not declared")
                 return False
 
             return True
@@ -1932,7 +1939,7 @@ class Analysis09:
                 return True
 
             if node.iden is not None and node.iden not in self.union_tags:
-                self.error = Error()
+                self.error = Error(f"error: 'union {node.iden}' was not declared")
                 return False
 
             return True
@@ -1945,7 +1952,7 @@ class Analysis09:
                 return True
 
             if node.iden is not None and node.iden not in self.enum_tags:
-                self.error = Error()
+                self.error = Error(f"error: 'enum {node.iden}' was not declared")
                 return False
 
             return True
@@ -2160,12 +2167,12 @@ class Analysis10(_TypeCheckBase):
 
         if isinstance(ret_base, VoidType):
             if node.ret_expr is not None:
-                self.error = Error()
+                self.error = Error("error: 'return' with a value in void function")
                 return False
             return True
 
         if node.ret_expr is None:
-            self.error = Error()
+            self.error = Error("error: 'return' with no value in non-void function")
             return False
 
         expr_t = self.type_of(node.ret_expr)
@@ -2174,7 +2181,7 @@ class Analysis10(_TypeCheckBase):
             return True  # Cannot determine type — skip.
 
         if not self.is_convertible(expr_t, self.ret_type):
-            self.error = Error()
+            self.error = Error("error: incompatible return type")
             return False
 
         return True
@@ -2398,11 +2405,11 @@ class Analysis11:
 
         if isinstance(node.init, ExprNode):
             if not self.is_const_expr(node.init):
-                self.error = Error()
+                self.error = Error(f"error: initializer of constexpr '{node.iden}' is not a constant expression")
                 return False
         else:
             if not self.is_const_init_list(node.init):
-                self.error = Error()
+                self.error = Error(f"error: initializer of constexpr '{node.iden}' is not a constant expression")
                 return False
 
         return True
@@ -2455,7 +2462,7 @@ class Analysis11:
 
         elif isinstance(node.decl, StaticAssertDecl):
             if not self.is_const_expr(node.decl.cond_expr):
-                self.error = Error()
+                self.error = Error("error: 'static_assert' condition is not a constant expression")
                 return False
 
         return True
@@ -2544,7 +2551,7 @@ class Analysis11:
 
             elif isinstance(decl, StaticAssertDecl):
                 if not self.is_const_expr(decl.cond_expr):
-                    self.error = Error()
+                    self.error = Error("error: 'static_assert' condition is not a constant expression")
                     return self.error
 
         for decl in ast.root.decls:
@@ -2626,7 +2633,7 @@ class Analysis12(_TypeCheckBase):
         # String literal initializing a char/wchar array directly.
         if isinstance(t_base, ArrayType) and isinstance(expr, StrLitExpr):
             if not self.str_lit_fits_array(expr, t_base):
-                self.error = Error()
+                self.error = Error("error: string literal encoding does not match array element type")
                 return False
             return True
 
@@ -2635,7 +2642,7 @@ class Analysis12(_TypeCheckBase):
             return True  # Cannot determine type — skip.
 
         if not self.is_convertible(expr_t, t):
-            self.error = Error()
+            self.error = Error("error: incompatible types in initializer")
             return False
 
         return True
@@ -2745,7 +2752,7 @@ class Analysis12(_TypeCheckBase):
                     # Single string literal initializes the whole array (§6.7.9 p14).
                     if isinstance(elem, StrLitExpr) and len(node.init_elems) == 1:
                         if not self.str_lit_fits_array(elem, t_base):
-                            self.error = Error()
+                            self.error = Error("error: string literal encoding does not match array element type")
                             return False
                     else:
                         if not self.check_expr_for_type(elem, elem_t):
@@ -3014,7 +3021,7 @@ class Analysis13:
     def check_lvalue(self, expr: ExprNode) -> bool:
         root = self.lvalue_root(expr)
         if root is not None and self.is_const(root):
-            self.error = Error()
+            self.error = Error(f"error: assignment to const-qualified variable '{root}'")
             return False
         return True
 
@@ -3434,27 +3441,27 @@ class Analysis14(_TypeCheckBase):
 
         if op == UnaPrefOpTag.bit_neg:
             if not self.is_integer(t):
-                self.error = Error()
+                self.error = Error(f"error: unary '~' requires an integer operand")
                 return False
 
         elif op in (UnaPrefOpTag.plus, UnaPrefOpTag.neg):
             if not self.is_arithmetic(t):
-                self.error = Error()
+                self.error = Error(f"error: unary '{op.value}' requires an arithmetic operand")
                 return False
 
         elif op in (UnaPrefOpTag.prefix_inc, UnaPrefOpTag.prefix_dec):
             if not (self.is_arithmetic(t) or self.is_pointer(t)):
-                self.error = Error()
+                self.error = Error(f"error: '{op.value}' requires an arithmetic or pointer operand")
                 return False
 
         elif op == UnaPrefOpTag.bool_neg:
             if not self.is_scalar(t):
-                self.error = Error()
+                self.error = Error(f"error: unary '!' requires a scalar operand")
                 return False
 
         elif op == UnaPrefOpTag.deref:
             if not isinstance(self.unqual(t), (PtrType, ArrayType)):
-                self.error = Error()
+                self.error = Error(f"error: unary '*' requires a pointer operand")
                 return False
 
         # addr_of: any lvalue is valid — no type constraint.
@@ -3475,7 +3482,7 @@ class Analysis14(_TypeCheckBase):
 
         if op in (UnaPostOpTag.postfix_inc, UnaPostOpTag.postfix_dec):
             if not (self.is_arithmetic(t) or self.is_pointer(t)):
-                self.error = Error()
+                self.error = Error(f"error: '{op.value}' requires an arithmetic or pointer operand")
                 return False
 
         return True
@@ -3504,7 +3511,7 @@ class Analysis14(_TypeCheckBase):
         if op in (BinOpTag.bit_and, BinOpTag.bit_or, BinOpTag.bit_xor,
                   BinOpTag.shl, BinOpTag.shr):
             if not self.is_integer(lt) or not self.is_integer(rt):
-                self.error = Error()
+                self.error = Error(f"error: '{op.value}' requires integer operands")
                 return False
 
         # Compound bitwise assignments: both operands must be integer.
@@ -3512,25 +3519,25 @@ class Analysis14(_TypeCheckBase):
                     BinOpTag.bit_and_assign, BinOpTag.bit_xor_assign,
                     BinOpTag.bit_or_assign):
             if not self.is_integer(lt) or not self.is_integer(rt):
-                self.error = Error()
+                self.error = Error(f"error: '{op.value}' requires integer operands")
                 return False
 
         # Modulo and modulo-assign: integer only.
         elif op in (BinOpTag.mod, BinOpTag.mod_assign):
             if not self.is_integer(lt) or not self.is_integer(rt):
-                self.error = Error()
+                self.error = Error(f"error: '{op.value}' requires integer operands")
                 return False
 
         # Multiplication and division: arithmetic only (pointer not allowed).
         elif op in (BinOpTag.mul, BinOpTag.div):
             if not self.is_arithmetic(lt) or not self.is_arithmetic(rt):
-                self.error = Error()
+                self.error = Error(f"error: '{op.value}' requires arithmetic operands")
                 return False
 
         # Compound multiply/divide: rhs must be arithmetic.
         elif op in (BinOpTag.mul_assign, BinOpTag.div_assign):
             if not self.is_arithmetic(lt) or not self.is_arithmetic(rt):
-                self.error = Error()
+                self.error = Error(f"error: '{op.value}' requires arithmetic operands")
                 return False
 
         # Addition: arithmetic+arithmetic, or pointer±integer (§6.5.6).
@@ -3539,24 +3546,24 @@ class Analysis14(_TypeCheckBase):
             rhs_is_ptr = isinstance(rt_base, (PtrType, ArrayType))
             if lhs_is_ptr:
                 if not self.is_integer(rt):
-                    self.error = Error()
+                    self.error = Error("error: pointer addition requires an integer offset")
                     return False
             elif rhs_is_ptr:
                 if not self.is_integer(lt):
-                    self.error = Error()
+                    self.error = Error("error: pointer addition requires an integer offset")
                     return False
             elif not (self.is_arithmetic(lt) and self.is_arithmetic(rt)):
-                self.error = Error()
+                self.error = Error("error: '+' requires arithmetic or pointer+integer operands")
                 return False
 
         # Compound add-assign: pointer += integer, or arithmetic += arithmetic.
         elif op == BinOpTag.add_assign:
             if isinstance(lt_base, (PtrType, ArrayType)):
                 if not self.is_integer(rt):
-                    self.error = Error()
+                    self.error = Error("error: '+=' on pointer requires an integer right-hand side")
                     return False
             elif not self.is_arithmetic(rt):
-                self.error = Error()
+                self.error = Error("error: '+=' requires arithmetic operands")
                 return False
 
         # Subtraction: arithmetic-arithmetic, pointer-integer, or
@@ -3566,32 +3573,32 @@ class Analysis14(_TypeCheckBase):
             rhs_is_ptr = isinstance(rt_base, (PtrType, ArrayType))
             if lhs_is_ptr:
                 if not (self.is_integer(rt) or rhs_is_ptr):
-                    self.error = Error()
+                    self.error = Error("error: pointer subtraction requires an integer or pointer right-hand side")
                     return False
             elif not (self.is_arithmetic(lt) and self.is_arithmetic(rt)):
-                self.error = Error()
+                self.error = Error("error: '-' requires arithmetic or pointer operands")
                 return False
 
         # Compound sub-assign: pointer -= integer, or arithmetic -= arithmetic.
         elif op == BinOpTag.sub_assign:
             if isinstance(lt_base, (PtrType, ArrayType)):
                 if not self.is_integer(rt):
-                    self.error = Error()
+                    self.error = Error("error: '-=' on pointer requires an integer right-hand side")
                     return False
             elif not self.is_arithmetic(rt):
-                self.error = Error()
+                self.error = Error("error: '-=' requires arithmetic operands")
                 return False
 
         # Logical operators: both operands must be scalar.
         elif op in (BinOpTag.bool_and, BinOpTag.bool_or):
             if not self.is_scalar(lt) or not self.is_scalar(rt):
-                self.error = Error()
+                self.error = Error(f"error: '{op.value}' requires scalar operands")
                 return False
 
         # Simple assignment: rhs must be convertible to lhs (§6.5.16.1).
         elif op == BinOpTag.assign:
             if not self.is_convertible(rt, lt):
-                self.error = Error()
+                self.error = Error("error: incompatible types in assignment")
                 return False
 
         return True
@@ -3615,14 +3622,14 @@ class Analysis14(_TypeCheckBase):
         # One operand must be a pointer/array; the other must be integer (§6.5.2.1).
         if isinstance(base_base, (PtrType, ArrayType)):
             if not self.is_integer(idx_t):
-                self.error = Error()
+                self.error = Error("error: array subscript must be an integer")
                 return False
         elif isinstance(idx_base, (PtrType, ArrayType)):
             if not self.is_integer(base_t):
-                self.error = Error()
+                self.error = Error("error: array subscript must be an integer")
                 return False
         else:
-            self.error = Error()
+            self.error = Error("error: subscript operator '[]' requires a pointer or array")
             return False
 
         return True
@@ -3643,20 +3650,20 @@ class Analysis14(_TypeCheckBase):
         if node.is_arrow:
             # -> requires pointer to struct or union (§6.5.2.3).
             if not isinstance(base_base, PtrType):
-                self.error = Error()
+                self.error = Error(f"error: '->' requires a pointer to struct or union")
                 return False
             pointee = self.unqual(base_base.pointee)
             if not isinstance(pointee, (StructType, UnionType,
                                         TypeDefType, TypeOfType,
                                         TypeOfUnqualType, AtomicType)):
-                self.error = Error()
+                self.error = Error(f"error: '->' on pointer to non-struct/union type")
                 return False
         else:
             # . requires struct or union directly (§6.5.2.3).
             if not isinstance(base_base, (StructType, UnionType,
                                           TypeDefType, TypeOfType,
                                           TypeOfUnqualType, AtomicType)):
-                self.error = Error()
+                self.error = Error(f"error: '.' requires a struct or union operand")
                 return False
 
         return True
@@ -3676,11 +3683,17 @@ class Analysis14(_TypeCheckBase):
         # Argument count: exact match for non-variadic, at-least for variadic.
         if not fun_t.is_variadic:
             if len(node.arg_exprs) != len(fun_t.params):
-                self.error = Error()
+                self.error = Error(
+                    f"error: function expects {len(fun_t.params)} argument(s), "
+                    f"got {len(node.arg_exprs)}"
+                )
                 return False
         else:
             if len(node.arg_exprs) < len(fun_t.params):
-                self.error = Error()
+                self.error = Error(
+                    f"error: function expects at least {len(fun_t.params)} argument(s), "
+                    f"got {len(node.arg_exprs)}"
+                )
                 return False
 
         # Argument type compatibility (§6.5.2.2).
@@ -3691,7 +3704,7 @@ class Analysis14(_TypeCheckBase):
             if self.is_unresolved(arg_t) or self.is_unresolved(param.param_type):
                 continue
             if not self.is_convertible(arg_t, param.param_type):
-                self.error = Error()
+                self.error = Error("error: incompatible argument type in function call")
                 return False
 
         return True
@@ -3708,7 +3721,7 @@ class Analysis14(_TypeCheckBase):
         cond_t = self.type_of(node.cond_expr)
         if cond_t is not None and not self.is_unresolved(cond_t):
             if not self.is_scalar(cond_t):
-                self.error = Error()
+                self.error = Error("error: conditional expression requires a scalar condition")
                 return False
 
         true_t  = self.type_of(node.true_expr)
@@ -3730,7 +3743,7 @@ class Analysis14(_TypeCheckBase):
         # Both branches must produce mutually compatible types (§6.5.15).
         if not (self.is_convertible(true_t, false_t) or
                 self.is_convertible(false_t, true_t)):
-            self.error = Error()
+            self.error = Error("error: incompatible types in conditional expression branches")
             return False
 
         return True

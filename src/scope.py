@@ -41,7 +41,7 @@ class Scope:
 
     def push_var(self, name: str, var: ScopeVar) -> None | Error:
         if name in self.frames[-1].vars:
-            return Error()
+            return Error(f"error: '{name}' is already declared in this scope")
 
         if var.block_id is None:
             result: None | Error = self.mem.sim_alloc(
@@ -98,7 +98,7 @@ class Scope:
             if name in self.frames[i].vars:
                 return self.frames[i].vars[name]
 
-        return Error()
+        return Error(f"error: '{name}' is not defined")
 
     def promote(self, name: str) -> int | Error:
 

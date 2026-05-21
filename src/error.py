@@ -36,16 +36,11 @@ class Span:
 
 
 class Error:
-    # def __init__(self, code: ErrorCode, span: Span, hint: str) -> None:
-    #     self.code = code
-    #     self.span = span
-    #     self.hint = hint
-
-    def __init__(self) -> None:
-        pass
+    def __init__(self, msg: str = "") -> None:
+        self.msg = msg
 
     def code(self) -> int:
         return 1
 
     def report(self) -> str:
-        return ""
+        return self.msg

@@ -14,6 +14,7 @@ from memory import Memory, MemoryType, MemoryBlock
 from scope import Scope, ScopeFrame, ScopeVar
 from convert import TypeConverter, MemConverter
 from cycle_simulation import CycleSimulator
+from tracer import Tracer
 
 
 # Evaluator
@@ -102,7 +103,7 @@ class Evaluator:
                  mem: Memory,
                  step_limit: int,
                  cycle_limit: int,
-                 trace_flag: bool) -> None:
+                 tracer: Tracer | None = None) -> None:
         self.mem = mem
         self.scope = Scope(mem)
 
@@ -115,7 +116,7 @@ class Evaluator:
         self.step_limit = step_limit
         self.cycle_limit = cycle_limit
 
-        self.trace_flag = trace_flag
+        self.tracer = tracer if tracer is not None else Tracer()
         self.direction = Direction.left_to_right
         self.cycle_sim = CycleSimulator()
 
@@ -169,17 +170,14 @@ class Evaluator:
         self.step_count += 1
 
         if self.step_limit > 0 and self.step_count > self.step_limit:
-            return Error()
+            return Error(f"error: step limit ({self.step_limit}) exceeded")
 
     def cycle_inc(self, node: ASTNode) -> None | Error:
         self.cycle_count += self.cycle_sim.cycle_cost(node)
 
         if self.cycle_limit > 0 and self.cycle_count > self.cycle_limit:
-            return Error()
+            return Error(f"error: cycle limit ({self.cycle_limit}) exceeded")
 
-    def trace(self, node: ASTNode) -> None:
-        if self.trace_flag:
-            print(f"[trace] {type(node).__name__}", file=sys.stderr)
 
     def load_scope_lvalue(self, val: ScopeLValue) -> ValueObject | Error:
         return self.scope.read(val.iden)
@@ -241,7 +239,7 @@ class Evaluator:
         if isinstance(val, MemoryLValue):
             return self.store_mem_lvalue(val, val_obj)
 
-        return Error()
+        return Error("error: expression is not assignable")
 
     def val_obj_type(self, val: ValueObject) -> TypeObject | None:
         if isinstance(val, BoolValue):
@@ -364,7 +362,7 @@ class Evaluator:
                         init: InitList) -> None | Error:
         block = self.mem.get(block_id)
         if isinstance(block, Error):
-            return Error()
+            return block
 
         if isinstance(t, StructType):
             member_names = list(t.members.keys())
@@ -374,7 +372,7 @@ class Evaluator:
                 if isinstance(elem, InitMember):
                     member = t.members.get(elem.member_iden)
                     if member is None:
-                        return Error()
+                        return Error(f"error: struct has no member '{elem.member_iden}'")
                     target = elem.expr_or_init
                     if target is None:
                         continue
@@ -382,38 +380,38 @@ class Evaluator:
                     if isinstance(target, ExprNode):
                         val = self.load(self.expr(target))
                         if isinstance(val, Error):
-                            return Error()
+                            return val
                         raw = MemConverter().to_mem_block(val)
                         result = block.write_block(off, raw)
                         if isinstance(result, Error):
-                            return Error()
+                            return result
                     elif isinstance(target, InitList):
                         result = self.apply_init_list(block_id, off, member.member_type, target)
                         if isinstance(result, Error):
-                            return Error()
+                            return result
 
                 elif isinstance(elem, ExprNode):
                     if seq_idx >= len(member_names):
-                        return Error()
+                        return Error("error: too many initializers for struct")
                     member = t.members[member_names[seq_idx]]
                     off = base_offset + member.offset
                     val = self.load(self.expr(elem))
                     if isinstance(val, Error):
-                        return Error()
+                        return val
                     raw = MemConverter().to_mem_block(val)
                     result = block.write_block(off, raw)
                     if isinstance(result, Error):
-                        return Error()
+                        return result
                     seq_idx += 1
 
                 elif isinstance(elem, InitList):
                     if seq_idx >= len(member_names):
-                        return Error()
+                        return Error("error: too many initializers for struct")
                     member = t.members[member_names[seq_idx]]
                     off = base_offset + member.offset
                     result = self.apply_init_list(block_id, off, member.member_type, elem)
                     if isinstance(result, Error):
-                        return Error()
+                        return result
                     seq_idx += 1
 
         elif isinstance(t, ArrayType):
@@ -424,9 +422,9 @@ class Evaluator:
                 if isinstance(elem, InitIndex):
                     idx_val = self.load(self.expr(elem.idx_expr))
                     if isinstance(idx_val, Error):
-                        return Error()
+                        return idx_val
                     if not isinstance(idx_val, IntValue):
-                        return Error()
+                        return Error("error: array index must be an integer")
                     seq_idx = idx_val.value
                     target = elem.expr_or_init
                     if target is None:
@@ -436,37 +434,37 @@ class Evaluator:
                     if isinstance(target, ExprNode):
                         val = self.load(self.expr(target))
                         if isinstance(val, Error):
-                            return Error()
+                            return val
                         raw = MemConverter().to_mem_block(val)
                         result = block.write_block(off, raw)
                         if isinstance(result, Error):
-                            return Error()
+                            return result
                     elif isinstance(target, InitList):
                         result = self.apply_init_list(block_id, off, t.elem_type, target)
                         if isinstance(result, Error):
-                            return Error()
+                            return result
                     seq_idx += 1
 
                 elif isinstance(elem, ExprNode):
                     if seq_idx >= t.length:
-                        return Error()
+                        return Error("error: too many initializers for array")
                     off = base_offset + seq_idx * elem_size
                     val = self.load(self.expr(elem))
                     if isinstance(val, Error):
-                        return Error()
+                        return val
                     raw = MemConverter().to_mem_block(val)
                     result = block.write_block(off, raw)
                     if isinstance(result, Error):
-                        return Error()
+                        return result
                     seq_idx += 1
 
                 elif isinstance(elem, InitList):
                     if seq_idx >= t.length:
-                        return Error()
+                        return Error("error: too many initializers for array")
                     off = base_offset + seq_idx * elem_size
                     result = self.apply_init_list(block_id, off, t.elem_type, elem)
                     if isinstance(result, Error):
-                        return Error()
+                        return result
                     seq_idx += 1
 
         elif isinstance(t, UnionType):
@@ -479,18 +477,18 @@ class Evaluator:
             if isinstance(elem, InitMember):
                 member_type = t.members.get(elem.member_iden)
                 if member_type is None:
-                    return Error()
+                    return Error(f"error: union has no member '{elem.member_iden}'")
                 target = elem.expr_or_init
                 if target is not None and isinstance(target, ExprNode):
                     val = self.load(self.expr(target))
                     if isinstance(val, Error):
-                        return Error()
+                        return val
                     raw = MemConverter().to_mem_block(val)
                     return block.write_block(base_offset, raw)
             elif isinstance(elem, ExprNode):
                 val = self.load(self.expr(elem))
                 if isinstance(val, Error):
-                    return Error()
+                    return val
                 raw = MemConverter().to_mem_block(val)
                 return block.write_block(base_offset, raw)
 
@@ -510,11 +508,11 @@ class Evaluator:
                 continue
             if i >= len(args):
                 self.scope.frames = saved_frames
-                return Error()
+                return Error(f"error: too few arguments to function '{node.iden}'")
             pt = self.resolve_type(param.param_type)
             if isinstance(pt, Error):
                 self.scope.frames = saved_frames
-                return Error()
+                return pt
 
             # Implicit conversion of argument to parameter type.
             arg = args[i]
@@ -527,9 +525,10 @@ class Evaluator:
             result = self.scope.declare(param.iden, pt, arg)
             if isinstance(result, Error):
                 self.scope.frames = saved_frames
-                return Error()
+                return result
 
-        signal = self.stmt(node.body)
+        with self.tracer.call_frame(node.iden):
+            signal = self.stmt(node.body)
 
         self.scope.pop_all()
         self.scope.frames = saved_frames
@@ -537,7 +536,7 @@ class Evaluator:
         if isinstance(signal, ReturnSignal):
             return signal.value if signal.value is not None else IntValue(I32, 0)
         if isinstance(signal, Error):
-            return Error()
+            return signal
         return IntValue(I32, 0)
 
     ###
@@ -842,7 +841,7 @@ class Evaluator:
         # Function identifiers used as direct call targets are resolved
         # in call_expr before this path is reached; return Error for any
         # other use (function pointers are not supported).
-        return Error()
+        return Error(f"error: '{node.iden}' is not defined")
 
     def nullptr_lit_expr(self, node: NullPtrLitExpr) -> ExprResult | Error:
         return PtrValue(PtrType(None), 0, 0)
@@ -952,16 +951,16 @@ class Evaluator:
             base, idx = idx, base
 
         if not isinstance(base, PtrValue) or not isinstance(idx, IntValue):
-            return Error()
+            return Error("error: array subscript requires a pointer and an integer")
 
         if base.ptr_type is None or base.ptr_type.target_type is None:
-            return Error()
+            return Error("error: array subscript on void pointer")
 
         target_type = base.ptr_type.target_type
         new_offset = base.offset + idx.value * target_type.size
 
         if base.block_id == 0:
-            return Error()
+            return Error("error: null pointer dereference in array subscript")
 
         return MemoryLValue(target_type, base.block_id, new_offset)
 
@@ -979,8 +978,9 @@ class Evaluator:
             fun = self.functions.get(callee_iden)
             if fun is not None:
                 return self.call_fun(fun, args)
+            return Error(f"error: '{callee_iden}' is not defined")
 
-        return Error()
+        return Error("error: indirect function calls are not supported")
 
     def member_arrow_expr(self, node: MemberExpr) -> ExprResult | Error:
         assert node.is_arrow
@@ -990,10 +990,10 @@ class Evaluator:
             return ptr
 
         if not isinstance(ptr, PtrValue):
-            return Error()
+            return Error("error: '->' requires a pointer type")
 
         if ptr.ptr_type is None or ptr.ptr_type.target_type is None:
-            return Error()
+            return Error("error: '->' on void pointer")
 
         target_type: TypeObject = ptr.ptr_type.target_type
 
@@ -1003,7 +1003,7 @@ class Evaluator:
         if isinstance(target_type, StructType):
             member = target_type.members.get(node.member_iden)
             if member is None:
-                return Error()
+                return Error(f"error: struct has no member '{node.member_iden}'")
 
             offset += member.offset
             member_type = member.member_type
@@ -1011,16 +1011,16 @@ class Evaluator:
         elif isinstance(target_type, UnionType):
             member_type = target_type.members.get(node.member_iden)
             if member_type is None:
-                return Error()
+                return Error(f"error: union has no member '{node.member_iden}'")
 
         else:
-            return Error()
+            return Error("error: '->' on non-struct/union pointer")
 
         if member_type is None:
-            return Error()
+            return Error(f"error: member '{node.member_iden}' has no type")
 
         if ptr.block_id == 0:
-            return Error()
+            return Error("error: null pointer dereference via '->'")
 
         return MemoryLValue(member_type, ptr.block_id, offset)
 
@@ -1246,13 +1246,13 @@ class Evaluator:
 
     def una_deref(self, val_obj: ValueObject) -> ExprResult | Error:
         if not isinstance(val_obj, PtrValue):
-            return Error()
+            return Error("error: dereference of non-pointer type")
 
         if val_obj.ptr_type is None or val_obj.ptr_type.target_type is None:
-            return Error()
+            return Error("error: dereference of void pointer")
 
         if val_obj.block_id == 0:
-            return Error()
+            return Error("error: null pointer dereference")
 
         target_type = val_obj.ptr_type.target_type
 
@@ -1394,14 +1394,14 @@ class Evaluator:
 
     def int_div(self, left: IntValue, right: IntValue) -> IntValue | Error:
         if right.value == 0:
-            return Error()
+            return Error("error: integer division by zero")
         # C truncates toward zero.
         result = int(left.value / right.value)
         return self.int_norm(left.value_type, result)
 
     def int_mod(self, left: IntValue, right: IntValue) -> IntValue | Error:
         if right.value == 0:
-            return Error()
+            return Error("error: integer modulo by zero")
         # C remainder: result has the sign of the dividend.
         int_value = left.value - int(left.value / right.value) * right.value
         return self.int_norm(left.value_type, int_value)
@@ -1421,13 +1421,13 @@ class Evaluator:
     def int_shl(self, left: IntValue, shift: int) -> IntValue | Error:
         bits = left.value_type.size * CHAR_BIT_SIZE
         if shift < 0 or shift >= bits:
-            return Error()
+            return Error(f"error: shift amount {shift} out of range for {bits}-bit integer")
         return self.int_norm(left.value_type, left.value << shift)
 
     def int_shr(self, left: IntValue, shift: int) -> IntValue | Error:
         bits = left.value_type.size * CHAR_BIT_SIZE
         if shift < 0 or shift >= bits:
-            return Error()
+            return Error(f"error: shift amount {shift} out of range for {bits}-bit integer")
         return self.int_norm(left.value_type, left.value >> shift)
 
     def int_eq(self, left: IntValue, right: IntValue) -> BoolValue:
@@ -1459,7 +1459,7 @@ class Evaluator:
 
     def float_div(self, left: FloatValue, right: FloatValue) -> FloatValue | Error:
         if right.value == 0.0:
-            return Error()
+            return Error("error: floating-point division by zero")
         return FloatValue(left.value_type, left.value / right.value)
 
     def float_eq(self, left: FloatValue, right: FloatValue) -> BoolValue:
@@ -2215,64 +2215,49 @@ class Evaluator:
         if isinstance(cycle_result, Error):
             return cycle_result
 
-        if isinstance(node, IdenExpr):
-            return self.iden_expr(node)
-
-        if isinstance(node, NullPtrLitExpr):
-            return self.nullptr_lit_expr(node)
-
-        if isinstance(node, BoolLitExpr):
-            return self.bool_lit_expr(node)
-
-        if isinstance(node, IntLitExpr):
-            return self.int_lit_expr(node)
-
-        if isinstance(node, RealFloatLitExpr):
-            return self.real_float_lit_expr(node)
-
-        if isinstance(node, DecFloatLitExpr):
-            return self.dec_float_lit_expr(node)
-
-        if isinstance(node, CharLitExpr):
-            return self.char_lit_expr(node)
-
-        if isinstance(node, StrLitExpr):
-            return self.str_lit_expr(node)
-
-        if isinstance(node, GenericSelExpr):
-            return self.generic_sel_expr(node)
-
-        if isinstance(node, ArraySubExpr):
-            return self.array_sub_expr(node)
-
-        if isinstance(node, CallExpr):
-            return self.call_expr(node)
-
-        if isinstance(node, MemberExpr):
-            return self.member_expr(node)
-
-        if isinstance(node, CompoundLitExpr):
-            return self.compound_lit_expr(node)
-
-        if isinstance(node, CastExpr):
-            return self.cast_expr(node)
-
-        if isinstance(node, SizeOfExpr):
-            return self.sizeof_expr(node)
-
-        if isinstance(node, AlignOfExpr):
-            return self.alignof_expr(node)
-
-        if isinstance(node, OpExpr):
-            return self.op_expr(node)
-
-        if isinstance(node, CondExpr):
-            return self.cond_expr(node)
-
-        if isinstance(node, CommaExpr):
-            return self.comma_expr(node)
-
-        assert False
+        with self.tracer.enter(type(node).__name__, self.tracer.node_detail(node)) as rec:
+            if isinstance(node, IdenExpr):
+                result = self.iden_expr(node)
+            elif isinstance(node, NullPtrLitExpr):
+                result = self.nullptr_lit_expr(node)
+            elif isinstance(node, BoolLitExpr):
+                result = self.bool_lit_expr(node)
+            elif isinstance(node, IntLitExpr):
+                result = self.int_lit_expr(node)
+            elif isinstance(node, RealFloatLitExpr):
+                result = self.real_float_lit_expr(node)
+            elif isinstance(node, DecFloatLitExpr):
+                result = self.dec_float_lit_expr(node)
+            elif isinstance(node, CharLitExpr):
+                result = self.char_lit_expr(node)
+            elif isinstance(node, StrLitExpr):
+                result = self.str_lit_expr(node)
+            elif isinstance(node, GenericSelExpr):
+                result = self.generic_sel_expr(node)
+            elif isinstance(node, ArraySubExpr):
+                result = self.array_sub_expr(node)
+            elif isinstance(node, CallExpr):
+                result = self.call_expr(node)
+            elif isinstance(node, MemberExpr):
+                result = self.member_expr(node)
+            elif isinstance(node, CompoundLitExpr):
+                result = self.compound_lit_expr(node)
+            elif isinstance(node, CastExpr):
+                result = self.cast_expr(node)
+            elif isinstance(node, SizeOfExpr):
+                result = self.sizeof_expr(node)
+            elif isinstance(node, AlignOfExpr):
+                result = self.alignof_expr(node)
+            elif isinstance(node, OpExpr):
+                result = self.op_expr(node)
+            elif isinstance(node, CondExpr):
+                result = self.cond_expr(node)
+            elif isinstance(node, CommaExpr):
+                result = self.comma_expr(node)
+            else:
+                assert False
+            rec.result = result
+            return result
 
     # Declarations.
     def trans_unit_decl(self, node: TransUnitDecl) -> None | Error:
@@ -2376,40 +2361,35 @@ class Evaluator:
         return None
 
     def decl(self, node: DeclNode) -> None | Error:
-        if isinstance(node, TransUnitDecl):
-            return self.trans_unit_decl(node)
-
-        if isinstance(node, EmptyDecl):
-            return self.empty_decl(node)
-
-        if isinstance(node, VarDecl):
-            return self.var_decl(node)
-
-        if isinstance(node, FunDecl):
-            return self.fun_decl(node)
-
-        if isinstance(node, EnumDecl):
-            return self.enum_decl(node)
-
-        if isinstance(node, StructDecl):
-            return self.struct_decl(node)
-
-        if isinstance(node, UnionDecl):
-            return self.union_decl(node)
-
-        if isinstance(node, TypedefDecl):
-            return self.typedef_decl(node)
-
-        if isinstance(node, StaticAssertDecl):
-            return self.static_assert_decl(node)
-
-        assert False
+        with self.tracer.enter(type(node).__name__, self.tracer.node_detail(node)) as rec:
+            if isinstance(node, TransUnitDecl):
+                result = self.trans_unit_decl(node)
+            elif isinstance(node, EmptyDecl):
+                result = self.empty_decl(node)
+            elif isinstance(node, VarDecl):
+                result = self.var_decl(node)
+            elif isinstance(node, FunDecl):
+                result = self.fun_decl(node)
+            elif isinstance(node, EnumDecl):
+                result = self.enum_decl(node)
+            elif isinstance(node, StructDecl):
+                result = self.struct_decl(node)
+            elif isinstance(node, UnionDecl):
+                result = self.union_decl(node)
+            elif isinstance(node, TypedefDecl):
+                result = self.typedef_decl(node)
+            elif isinstance(node, StaticAssertDecl):
+                result = self.static_assert_decl(node)
+            else:
+                assert False
+            rec.result = result
+            return result
 
     # Statements.
     def println_stmt(self, node: PrintLnStmt) -> StmtResult | Error:
         msg = self.fmt_sub(node.str_expr, node.arg_exprs)
         if isinstance(msg, Error):
-            return Error()
+            return msg
 
         print(msg)
         return None
@@ -2598,61 +2578,47 @@ class Evaluator:
         return ReturnSignal(val)
 
     def stmt(self, node: StmtNode) -> StmtResult | Error:
-        self.trace(node)
-
         step_result = self.step_inc()
         if isinstance(step_result, Error):
             return step_result
 
-        if isinstance(node, AssertStmt):
-            return self.assert_stmt(node)
-
-        if isinstance(node, PrintLnStmt):
-            return self.println_stmt(node)
-
-        if isinstance(node, CompoundStmt):
-            return self.compound_stmt(node)
-
-        if isinstance(node, DeclStmt):
-            return self.decl_stmt(node)
-
-        if isinstance(node, ExprStmt):
-            return self.expr_stmt(node)
-
-        if isinstance(node, IfStmt):
-            return self.if_stmt(node)
-
-        if isinstance(node, SwitchStmt):
-            return self.switch_stmt(node)
-
-        if isinstance(node, ForStmt):
-            return self.for_stmt(node)
-
-        if isinstance(node, WhileStmt):
-            return self.while_stmt(node)
-
-        if isinstance(node, DoWhileStmt):
-            return self.do_while_stmt(node)
-
-        if isinstance(node, GotoStmt):
-            return self.goto_stmt(node)
-
-        if isinstance(node, LabelStmt):
-            return None
-
-        if isinstance(node, CaseLabelStmt):
-            return None
-
-        if isinstance(node, BreakStmt):
-            return self.break_stmt()
-
-        if isinstance(node, ContinueStmt):
-            return self.continue_stmt()
-
-        if isinstance(node, ReturnStmt):
-            return self.return_stmt(node)
-
-        return None
+        with self.tracer.enter(type(node).__name__, self.tracer.node_detail(node)) as rec:
+            if isinstance(node, AssertStmt):
+                result = self.assert_stmt(node)
+            elif isinstance(node, PrintLnStmt):
+                result = self.println_stmt(node)
+            elif isinstance(node, CompoundStmt):
+                result = self.compound_stmt(node)
+            elif isinstance(node, DeclStmt):
+                result = self.decl_stmt(node)
+            elif isinstance(node, ExprStmt):
+                result = self.expr_stmt(node)
+            elif isinstance(node, IfStmt):
+                result = self.if_stmt(node)
+            elif isinstance(node, SwitchStmt):
+                result = self.switch_stmt(node)
+            elif isinstance(node, ForStmt):
+                result = self.for_stmt(node)
+            elif isinstance(node, WhileStmt):
+                result = self.while_stmt(node)
+            elif isinstance(node, DoWhileStmt):
+                result = self.do_while_stmt(node)
+            elif isinstance(node, GotoStmt):
+                result = self.goto_stmt(node)
+            elif isinstance(node, LabelStmt):
+                result = None
+            elif isinstance(node, CaseLabelStmt):
+                result = None
+            elif isinstance(node, BreakStmt):
+                result = self.break_stmt()
+            elif isinstance(node, ContinueStmt):
+                result = self.continue_stmt()
+            elif isinstance(node, ReturnStmt):
+                result = self.return_stmt(node)
+            else:
+                result = None
+            rec.result = result
+            return result
 
     def eval(self, node: ASTNode) -> ExprResult | StmtResult | Error:
         if isinstance(node, ExprNode):
@@ -2675,7 +2641,7 @@ class Evaluator:
 
         main = self.functions.get("main")
         if main is None:
-            return Error()
+            return Error("error: no 'main' function defined")
 
         ret_val = self.call_fun(main, [])
         if isinstance(ret_val, Error):

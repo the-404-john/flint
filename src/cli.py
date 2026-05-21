@@ -13,6 +13,7 @@ from cli_messages import *
 from repl import REPL
 from build import Builder
 from eval import Evaluator
+from tracer import Tracer
 from format import Formater
 from memory import Memory
 
@@ -103,12 +104,13 @@ class CLI:
 
                 if opt in {CLIOption.step_limit, CLIOption.cycle_limit}:
                     if self.peek() is None:
-                        return self.report_failure(Error())
+                        return self.report_failure(Error(f"error: {opt.value} requires a numeric value"))
 
                     result: int | Error = str_to_int(self.peek())
                     if isinstance(result, Error):
-                        return self.report_failure(result)
+                        return self.report_failure(Error(f"error: {opt.value} requires a non-negative integer"))
 
+                    self.fetch()  # consume the numeric argument
                     options[opt] = result
 
             if prev_len == len(options):
@@ -132,7 +134,13 @@ class CLI:
             self.file_name = self.fetch()
             return True
         else:
-            self.report_failure(Error())
+            arg = self.peek()
+            if arg is None:
+                self.report_failure(Error("error: no input file specified"))
+            elif not arg.endswith(".c"):
+                self.report_failure(Error(f"error: '{arg}' is not a C source file (.c required)"))
+            else:
+                self.report_failure(Error(f"error: invalid argument '{arg}'"))
             return False
 
     def match_options(self, cmd: str) -> bool:
@@ -276,7 +284,7 @@ class CLI:
         verbose     = CLIOption.verbose in self.options
 
         mem = Memory(1 << 20, 1 << 20, 4 << 20)
-        result: int | Error = Evaluator(mem, step_limit, cycle_limit, verbose).run(ast)
+        result: int | Error = Evaluator(mem, step_limit, cycle_limit, Tracer(verbose)).run(ast)
         if isinstance(result, Error):
             return self.report_failure(result)
 

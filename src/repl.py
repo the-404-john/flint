@@ -173,7 +173,7 @@ def _format_value(val: ValueObject) -> str:
 class REPL:
     def __init__(self) -> None:
         self.mem = Memory(_MEM_DATA, _MEM_STACK, _MEM_HEAP)
-        self.ev  = Evaluator(self.mem, sys.maxsize, sys.maxsize, False)
+        self.ev  = Evaluator(self.mem, sys.maxsize, sys.maxsize)
         self.exit_code: int = 0
 
     # ── Output ────────────────────────────────────────────────────────────────

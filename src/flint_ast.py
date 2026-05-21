@@ -742,10 +742,15 @@ class AST:
             token: Token = tok.next()
 
             if token.tag == TokenTag.invalid:
-                return Error()
+                desc = token.err.value if token.err is not None else "invalid token"
+                snippet = self.buffer[token.loc.start:token.loc.end]
+                line = self.buffer.count('\n', 0, token.loc.start) + 1
+                return Error(f"error:{line}: {desc}: '{snippet}'")
 
             if not self.is_token_supported(token):
-                return Error()
+                snippet = self.buffer[token.loc.start:token.loc.end]
+                line = self.buffer.count('\n', 0, token.loc.start) + 1
+                return Error(f"error:{line}: unsupported token '{snippet}'")
 
             if not save_comments and token.tag in COMMENT_TAGS:
                 continue

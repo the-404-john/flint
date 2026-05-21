@@ -39,19 +39,19 @@ class Builder:
                 # source_code = source_code.replace("\\\n", "")
 
         except FileNotFoundError:
-            return Error()
+            return Error(f"error: file not found: '{file_name}'")
 
         except PermissionError:
-            return Error()
+            return Error(f"error: permission denied reading '{file_name}'")
 
-        except UnicodeDecodeError as e:
-            return Error()
+        except UnicodeDecodeError:
+            return Error(f"error: '{file_name}' is not valid UTF-8")
 
         except OSError as e:
-            return Error()
+            return Error(f"error: failed to read '{file_name}': {e}")
 
         # Translation phase 2.
         if source_code.find("\\\n") != -1:
-            return Error()
+            return Error("error: line splicing ('\\\\n') is not supported")
 
         return self.build_source(source_code)
